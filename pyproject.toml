@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "philo"
+version = "0.1.0"
+description = "Philosophy for Everyone — a grounded, citation-first philosophy companion in your terminal."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Philosophy for Everyone" }]
+keywords = ["philosophy", "rag", "retrieval", "openai", "azure", "cli"]
+
+# Deliberately tiny. `rich` is the only hard dependency — everything else
+# degrades gracefully (see philo/util.py and philo/providers/).
+dependencies = ["rich>=13.0"]
+
+[project.optional-dependencies]
+# Real model providers. Not needed for the offline `mock` provider.
+openai = ["openai>=1.30"]
+# ~50x faster similarity search. Pure-Python fallback used when absent.
+fast = ["numpy>=1.24"]
+all = ["openai>=1.30", "numpy>=1.24"]
+
+[project.scripts]
+philo = "philo.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["philo*"]
+
+[tool.setuptools.package-data]
+philo = ["py.typed"]
