@@ -1,0 +1,385 @@
+"""The offline provider.  No network, no key, no cost — and no excuses.
+
+This exists so the entire pipeline (chunk → embed → store → retrieve → prompt
+→ generate → render) can be exercised and debugged with zero external moving
+parts.  When something breaks in mock mode it is a bug in *our* code; when it
+only breaks against a real API it is a key/network/model problem.  Keeping
+those two failure classes separable is worth every line below.
+
+Two things are simulated:
+
+*Embeddings* — a hashed bag-of-words projection.  Not semantic, but genuinely
+lexical: it really does rank a passage about death above a passage about
+rhetoric when you ask about death, so retrieval can be evaluated offline.
+
+*Generation* — an extractive composer.  It never invents philosophy.  It
+selects real sentences from the retrieved context and arranges them into the
+same two-layer, citation-marked shape a real model is asked to produce, so
+the parser and the renderer are exercised against realistic output.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+import time
+from collections import Counter
+from typing import Sequence
+
+from ..models import Message
+from ..util import (
+    detect_language,
+    env_float,
+    l2_normalize,
+    split_sentences,
+    tokenize,
+    truncate,
+)
+from .base import ChatResult, ProgressCallback, StreamCallback
+
+MOCK_DIM = 384
+
+
+class MockProvider:
+    """Deterministic, dependency-free stand-in for a real model."""
+
+    name = "mock"
+
+    def __init__(self, dim: int = MOCK_DIM, chat_model: str = "mock-sage-1") -> None:
+        self._dim = dim
+        self._chat_model = chat_model
+        self._delay = env_float("PHILO_MOCK_DELAY", 0.006)
+
+    # -- identity ---------------------------------------------------------
+    @property
+    def chat_model(self) -> str:
+        return self._chat_model
+
+    @property
+    def embed_model(self) -> str:
+        return f"mock-embed-{self._dim}"
+
+    @property
+    def embed_dim(self) -> int:
+        return self._dim
+
+    # -- embeddings -------------------------------------------------------
+    def embed(
+        self,
+        texts: Sequence[str],
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> list[list[float]]:
+        out: list[list[float]] = []
+        total = len(texts)
+        for i, text in enumerate(texts, 1):
+            out.append(self._hash_embed(text))
+            if on_progress and (i % 16 == 0 or i == total):
+                on_progress(i, total)
+        return out
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._hash_embed(text)
+
+    def _hash_embed(self, text: str) -> list[float]:
+        """Feature-hash tokens and adjacent token pairs into a fixed vector.
+
+        Sublinear term frequency (1 + log tf) keeps a word repeated twenty
+        times from swamping the vector, which matters a lot for the
+        incantatory repetition in texts like the Daodejing.
+        """
+        vec = [0.0] * self._dim
+        tokens = tokenize(text)
+        if not tokens:
+            return vec
+
+        counts = Counter(tokens)
+        # Bigrams give the vector a little word-order sensitivity, so
+        # "fear of death" and "death of fear" are not identical.
+        counts.update(f"{a}_{b}" for a, b in zip(tokens, tokens[1:]))
+
+        for term, tf in counts.items():
+            weight = 1.0 + math.log(tf)
+            if "_" in term:
+                weight *= 0.6  # bigrams are supporting evidence, not primary
+            # Two independent hashes per term reduce collision damage; the
+            # sign hash keeps unrelated collisions cancelling rather than
+            # accumulating.
+            h = _fnv1a(term)
+            idx = h % self._dim
+            sign = 1.0 if (h >> 17) & 1 else -1.0
+            vec[idx] += sign * weight
+            h2 = _fnv1a("~" + term)
+            vec[h2 % self._dim] += (1.0 if (h2 >> 17) & 1 else -1.0) * weight * 0.5
+
+        return l2_normalize(vec)
+
+    # -- generation -------------------------------------------------------
+    def chat(
+        self,
+        messages: Sequence[Message],
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = 1200,
+        stream_cb: StreamCallback | None = None,
+        task: str = "answer",
+    ) -> ChatResult:
+        started = time.perf_counter()
+        prompt = "\n\n".join(m["content"] for m in messages if m["role"] == "user")
+        sources = _parse_sources(prompt)
+        question = _parse_question(prompt)
+        lang = detect_language(question or prompt)
+
+        if task == "daily":
+            text = _compose_daily(question, sources, lang)
+        elif not sources:
+            text = _compose_refusal(question, lang)
+        else:
+            text = _compose_answer(question, sources, lang)
+
+        if stream_cb:
+            for piece in _tokenize_for_stream(text):
+                stream_cb(piece)
+                if self._delay:
+                    time.sleep(self._delay)
+
+        return ChatResult(
+            text=text,
+            model=self._chat_model,
+            provider=self.name,
+            usage={
+                "prompt_tokens": len(prompt) // 4,
+                "completion_tokens": len(text) // 4,
+                "total_tokens": (len(prompt) + len(text)) // 4,
+            },
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            finish_reason="stop",
+        )
+
+    def healthcheck(self) -> str:
+        v = self.embed_query("the unexamined life is not worth living")
+        assert abs(sum(x * x for x in v) - 1.0) < 1e-6
+        return f"offline mock provider ready · {self._dim}-dim hashed embeddings"
+
+
+# --------------------------------------------------------------------------
+# Prompt parsing — the mock reads the same context block the real model sees
+# --------------------------------------------------------------------------
+
+_SOURCE_RE = re.compile(
+    r"^\[(\d{1,2})\]\s*(.+?)\n\"\"\"\n(.*?)\n\"\"\"",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+class _Source:
+    __slots__ = ("marker", "citation", "text", "philosopher", "work")
+
+    def __init__(self, marker: int, citation: str, text: str) -> None:
+        self.marker = marker
+        self.citation = citation.strip()
+        self.text = text.strip()
+        bits = [b.strip() for b in re.split(r"·|,", citation)]
+        self.philosopher = bits[0] if bits else ""
+        self.work = bits[1] if len(bits) > 1 else ""
+
+
+def _parse_sources(prompt: str) -> list[_Source]:
+    return [
+        _Source(int(m.group(1)), m.group(2), m.group(3))
+        for m in _SOURCE_RE.finditer(prompt)
+    ]
+
+
+def _parse_question(prompt: str) -> str:
+    m = re.search(r"(?:QUESTION|问题|THEME|主题)\s*:\s*(.+)", prompt)
+    if m:
+        return m.group(1).strip()
+    # Fall back to the last non-empty line that isn't part of a source block.
+    for line in reversed(prompt.splitlines()):
+        line = line.strip()
+        if line and not line.startswith(("[", '"""', "-", "#")):
+            return line
+    return ""
+
+
+# --------------------------------------------------------------------------
+# Composition
+# --------------------------------------------------------------------------
+
+
+def _key_sentences(src: _Source, query: str, limit: int = 2) -> list[str]:
+    """Pick the sentences that actually earn their place in the answer.
+
+    Scored by overlap with the query, with a mild preference for
+    quotable-length sentences — very short fragments carry no argument and
+    very long ones stop being quotable.
+    """
+    qterms = set(tokenize(query))
+    scored: list[tuple[float, str]] = []
+    for sent in split_sentences(src.text):
+        clean = sent.strip()
+        if len(clean) < 25:
+            continue
+        terms = set(tokenize(clean))
+        if not terms:
+            continue
+        overlap = len(qterms & terms) / max(1, len(qterms)) if qterms else 0.0
+        length_fit = 1.0 - abs(len(clean) - 160) / 400.0
+        scored.append((overlap * 2.0 + max(0.0, length_fit), clean))
+    if not scored:
+        return [truncate(src.text, 200)]
+    scored.sort(key=lambda p: p[0], reverse=True)
+    return [s for _, s in scored[:limit]]
+
+
+def _compose_answer(question: str, sources: list[_Source], lang: str) -> str:
+    top = sources[:3]
+    names = _oxford([s.philosopher for s in top if s.philosopher], lang)
+
+    plain_lines: list[str] = []
+    academic_lines: list[str] = []
+
+    if lang == "zh":
+        plain_lines.append(
+            f"关于「{question}」，检索到的原文里，{names}谈得最直接。他们的说法可以这样理解："
+        )
+        for s in top:
+            sent = _key_sentences(s, question, 1)[0]
+            plain_lines.append(f"\n- {s.philosopher}：“{truncate(sent, 180)}” [{s.marker}]")
+        plain_lines.append(
+            "\n以上都是原文的直接摘录。离线模式不作解释与推衍——切换到真实模型后，"
+            "同样这几段原文会被展开成完整的白话讲解。"
+        )
+
+        academic_lines.append("检索到的段落按论证角色排列如下：\n")
+        for s in top:
+            sents = _key_sentences(s, question, 2)
+            academic_lines.append(f"**[{s.marker}] {s.citation}**")
+            for sent in sents:
+                academic_lines.append(f"> {truncate(sent, 300)}")
+            academic_lines.append("")
+        academic_lines.append(
+            f"以上引文均直接取自检索到的{len(sources)}段原文，未作推衍。"
+            "若要判断这些立场彼此是否相容，需要回到各自的完整语境。"
+        )
+    else:
+        plain_lines.append(
+            f"On “{question}”, the retrieved passages put {names} closest to the question. "
+            "Here is what they actually say, in ordinary language:"
+        )
+        for s in top:
+            sent = _key_sentences(s, question, 1)[0]
+            plain_lines.append(f"\n- {s.philosopher or 'The text'}: “{truncate(sent, 180)}” [{s.marker}]")
+        plain_lines.append(
+            "\nEach line above is lifted straight from the retrieved passages. Offline mode "
+            "selects and arranges; it does not interpret. Point this at a real model and the "
+            "same passages come back as a worked explanation."
+        )
+
+        academic_lines.append("The retrieved passages, arranged by argumentative role:\n")
+        for s in top:
+            sents = _key_sentences(s, question, 2)
+            academic_lines.append(f"**[{s.marker}] {s.citation}**")
+            for sent in sents:
+                academic_lines.append(f"> {truncate(sent, 300)}")
+            academic_lines.append("")
+        academic_lines.append(
+            f"Every line above is quoted directly from the {len(sources)} retrieved passages; "
+            "nothing has been extrapolated. Whether these positions are mutually consistent "
+            "requires reading each in its full context."
+        )
+
+    head_plain = "## IN PLAIN WORDS"
+    head_acad = "## THE ARGUMENT"
+    return f"{head_plain}\n" + "\n".join(plain_lines) + f"\n\n{head_acad}\n" + "\n".join(academic_lines)
+
+
+def _compose_refusal(question: str, lang: str) -> str:
+    if lang == "zh":
+        return (
+            "## IN PLAIN WORDS\n"
+            f"关于「{question}」，我在当前library里没有检索到相关的原文段落，所以不能回答。\n\n"
+            "## THE ARGUMENT\n"
+            "本系统只根据检索到的原文作答。既然没有可引用的段落，任何回答都会是凭记忆编造，"
+            "这正是本项目要避免的。可以尝试：换一个说法提问、放宽 --philosopher 过滤条件，"
+            "或用 `philo ingest` 把相关文本加入library。"
+        )
+    return (
+        "## IN PLAIN WORDS\n"
+        f"I could not find anything in the current library that speaks to “{question}”, "
+        "so I am not going to answer it.\n\n"
+        "## THE ARGUMENT\n"
+        "This system answers only from retrieved primary text. With no passage to cite, any "
+        "answer would be reconstructed from memory — exactly the failure mode this project "
+        "exists to prevent. Try rephrasing, relaxing the --philosopher filter, or adding the "
+        "relevant text with `philo ingest`."
+    )
+
+
+def _compose_daily(theme: str, sources: list[_Source], lang: str) -> str:
+    if not sources:
+        return _compose_refusal(theme, lang)
+    s = sources[0]
+    quote = _key_sentences(s, theme, 1)[0]
+    others = sources[1:3]
+
+    if lang == "zh":
+        return (
+            f"## TITLE\n今天，先把{theme}放回它的原文里\n\n"
+            f"## HOOK\n你大概已经把「{theme}」当成一个常识了。"
+            f"但{s.philosopher}在《{s.work}》里谈到它时，语气要冷静得多——"
+            "他不是在安慰谁，而是在做一个区分。\n\n"
+            f"## QUOTE\n{truncate(quote, 260)} [{s.marker}]\n\n"
+            f"## REFLECTION\n这句话之所以值得停一下，是因为它把一个习以为常的说法重新变成了问题。"
+            + (f"{others[0].philosopher}在另一处也谈到相近的地方 [{others[0].marker}]。" if others else "")
+            + "离线模式只负责把原文摆到你面前，判断留给你自己。\n\n"
+            f"## PRACTICE\n今天遇到一件让你烦躁的事时，先花十秒钟问一句："
+            "这件事里，究竟哪一部分在我手里？然后只处理那一部分。"
+        )
+    return (
+        f"## TITLE\nPutting “{theme}” back in its original words\n\n"
+        f"## HOOK\nYou have probably filed “{theme}” away as common sense. "
+        f"When {s.philosopher} takes it up in {s.work}, the tone is far cooler — "
+        "less consolation, more distinction-drawing.\n\n"
+        f"## QUOTE\n{truncate(quote, 260)} [{s.marker}]\n\n"
+        f"## REFLECTION\nThe line is worth pausing on because it turns something familiar back "
+        "into a question. "
+        + (f"{others[0].philosopher} presses on neighbouring ground [{others[0].marker}]. " if others else "")
+        + "Offline mode puts the passage in front of you; the judgement stays yours.\n\n"
+        f"## PRACTICE\nThe next time something today irritates you, take ten seconds first: "
+        "which part of this is actually up to me? Then work only on that part."
+    )
+
+
+def _oxford(names: list[str], lang: str) -> str:
+    names = [n for n in dict.fromkeys(names) if n]
+    if not names:
+        return "the retrieved passages" if lang != "zh" else "这些段落"
+    if lang == "zh":
+        return "、".join(names)
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + f" and {names[-1]}"
+
+
+def _tokenize_for_stream(text: str, size: int = 18) -> list[str]:
+    """Chop into word-ish pieces so streaming looks like a real model."""
+    pieces, buf = [], ""
+    for word in re.split(r"(\s+)", text):
+        buf += word
+        if len(buf) >= size:
+            pieces.append(buf)
+            buf = ""
+    if buf:
+        pieces.append(buf)
+    return pieces
+
+
+def _fnv1a(s: str) -> int:
+    """FNV-1a — stable across processes, unlike Python's salted hash()."""
+    h = 0xCBF29CE484222325
+    for byte in s.encode("utf-8"):
+        h ^= byte
+        h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
