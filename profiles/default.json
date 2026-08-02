@@ -1,0 +1,22 @@
+{
+  "name": "default",
+  "display_name": "",
+  "language": "en",
+  "level": "curious",
+  "interests": [
+    "how to handle anxiety",
+    "what makes a life good",
+    "free will and responsibility",
+    "how to think about death",
+    "knowing what is true"
+  ],
+  "philosophers": [],
+  "traditions": [
+    "Stoicism",
+    "Daoism"
+  ],
+  "avoid": [],
+  "tone": "warm, concrete, a little wry",
+  "daily_length": "short",
+  "history": []
+}
