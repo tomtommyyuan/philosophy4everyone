@@ -93,18 +93,84 @@ That runs entirely on the built-in **mock provider** — no network, no key, no 
 Retrieval is real; generation is extractive rather than written. It exists so you
 can verify the whole pipeline before a single API call (see *Offline first* below).
 
-To use a real model, add a key and re-index:
+To use a real model, export **any one** of these and re-index:
 
 ```bash
-cp .env.example .env        # then set OPENAI_API_KEY, or the AZURE_OPENAI_* set
-.venv/bin/python -m philo doctor --probe   # verify the key actually works
+export OPENAI_API_KEY=sk-...           # chat + embeddings
+export ANTHROPIC_API_KEY=sk-ant-...    # chat only — see below
+export GEMINI_API_KEY=...              # chat + embeddings
+# or the four AZURE_OPENAI_* variables
+
+.venv/bin/python -m philo doctor --probe   # verify the keys actually work
 .venv/bin/python -m philo ingest --rebuild # re-embed with the real model
 .venv/bin/python -m philo ask "why should I not fear death?"
 ```
 
+An API key is now **required**: with nothing configured the CLI refuses to start
+and prints the exact exports above, rather than quietly answering from the mock.
+`PHILO_PROVIDER=mock` still selects offline mode explicitly.
+
 `--rebuild` is required when you switch providers, and the index refuses to load
 if you forget: vectors from different embedding models are not comparable, and
 comparing them produces confident nonsense rather than an error.
+
+---
+
+## Providers
+
+OpenAI, Azure OpenAI, Anthropic and Gemini, plus the offline mock. Export a key
+and philo picks it up — nothing else to configure.
+
+| Provider | Chat | Embeddings | Key |
+|---|:---:|:---:|---|
+| OpenAI | ✅ | ✅ | `OPENAI_API_KEY` |
+| Azure OpenAI | ✅ | ✅ | `AZURE_OPENAI_*` (four variables) |
+| Anthropic (Claude) | ✅ | ❌ | `ANTHROPIC_API_KEY` |
+| Google Gemini | ✅ | ✅ | `GEMINI_API_KEY` |
+| mock | ✅ | ✅ | none — fully offline |
+
+### Chat and embeddings are resolved separately
+
+**Anthropic publishes no embeddings endpoint.** The Messages API is its entire
+surface, so "use Claude" cannot mean "use Claude for everything" — Claude writes
+the answers and somebody else builds the index. Rather than paper over that with
+an `embed()` that throws halfway through an ingest, the provider layer resolves
+the two roles independently and pairs them:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...            # or GEMINI_API_KEY
+export PHILO_CHAT_PROVIDER=anthropic    # → claude-opus-5 + text-embedding-3-small
+```
+
+`philo doctor` always names both halves, because only one of them constrains
+your index: **vectors belong to the embedding provider.** Swapping the chat model
+is free; swapping the embedding model requires `philo ingest --rebuild`, and the
+store refuses to load a mismatched index rather than silently comparing vectors
+from different spaces.
+
+Left unset, providers are auto-detected from whichever keys exist, preferring
+`azure → openai → anthropic → gemini` for chat and `azure → openai → gemini` for
+embeddings. `PHILO_CHAT_PROVIDER` and `PHILO_EMBED_PROVIDER` override either half.
+
+### Per-provider quirks, handled
+
+Each vendor breaks a different assumption, and each is handled in its adapter
+rather than leaking into the pipeline:
+
+- **Claude rejects `temperature`.** The Claude 5 family removed sampling
+  parameters — sending one is a 400, not a warning. Depth is set with
+  `PHILO_ANTHROPIC_EFFORT` (`low`…`max`) instead.
+- **Claude's `max_tokens` covers thinking *and* the answer.** Thinking is on by
+  default, so a budget sized for the visible text truncates mid-sentence; the
+  adapter raises a floor.
+- **Gemini embeds documents and queries asymmetrically.** Passages go in as
+  `RETRIEVAL_DOCUMENT`, questions as `RETRIEVAL_QUERY`; using the document mode
+  for a query measurably hurts recall. This is why the embedding interface has
+  had a separate `embed_query` from the start.
+- **Refusals and safety blocks are HTTP 200.** Claude returns
+  `stop_reason: "refusal"`, Gemini returns a candidate-less response. Both would
+  render as a blank answer if unchecked, so both become readable text.
 
 ---
 
@@ -366,9 +432,15 @@ Everything is environment variables, read from `.env`. See
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PHILO_PROVIDER` | auto | `mock` \| `openai` \| `azure` |
+| `PHILO_PROVIDER` | auto | `openai` \| `azure` \| `anthropic` \| `gemini` \| `mock` |
+| `PHILO_CHAT_PROVIDER` | auto | Override just the chat half |
+| `PHILO_EMBED_PROVIDER` | auto | Override just the embedding half |
 | `PHILO_CHAT_MODEL` | `gpt-4o` | OpenAI model name |
 | `PHILO_EMBED_MODEL` | `text-embedding-3-small` | OpenAI embedding model |
+| `PHILO_ANTHROPIC_MODEL` | `claude-opus-5` | Claude model |
+| `PHILO_ANTHROPIC_EFFORT` | `medium` | Claude reasoning depth (no `temperature`) |
+| `PHILO_GEMINI_MODEL` | `gemini-2.5-flash` | Gemini chat model |
+| `PHILO_GEMINI_EMBED_MODEL` | `gemini-embedding-001` | Gemini embedding model |
 | `AZURE_OPENAI_CHAT_DEPLOYMENT` | — | Azure **deployment** name, not model name |
 | `PHILO_TOP_K` | `6` | Passages sent to the model |
 | `PHILO_HYBRID_ALPHA` | `0.72` | 1.0 = pure embeddings, 0.0 = pure BM25 |
@@ -384,7 +456,7 @@ turns the resulting 404 into a message that says so.
 ## Development
 
 ```bash
-make test                     # 97 tests, offline, no key required
+make test                     # 120 tests, offline, no key required
 .venv/bin/python -m pytest tests -q
 ```
 
@@ -397,7 +469,8 @@ markers are stripped before a reader ever sees them.
 philo/
   config.py            settings, provider auto-detection
   models.py            Work, Chunk, ScoredChunk, Answer, DailyPiece
-  providers/           mock (offline) · openai · azure — one interface
+  providers/           mock · openai · azure · anthropic · gemini
+                       chat and embeddings are separate protocols
   corpus/              loader · argument-aware chunker · ingest pipeline
   store/               local vector store, three inspectable files
   retrieval/           hybrid dense + BM25, MMR diversity, relevance floor
@@ -411,9 +484,14 @@ Dockerfile             container image, index baked in
 api/ + vercel.json     serverless adapter
 ```
 
-`rich` is the only hard dependency. `numpy` is optional (≈50× faster search;
-pure-Python fallback otherwise), `openai` is only needed for real providers, and
-`fastapi`/`uvicorn` only for `philo serve` — `pip install "philo[web]"`.
+`rich` is the only hard dependency; every provider SDK is an optional extra, so
+you install only the vendors you use:
+
+```bash
+pip install "philo[openai]"     # or [anthropic], [gemini], [web], [fast], [all]
+```
+
+`numpy` is optional too (≈50× faster search; pure-Python fallback otherwise).
 
 ---
 
