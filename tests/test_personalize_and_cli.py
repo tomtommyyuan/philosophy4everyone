@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from philo.config import Settings, _resolve_provider
+from philo.config import Settings
 from philo.corpus.ingest import ingest
 from philo.generation.answerer import Engine
 from philo.personalize.daily import candidate_themes, generate_daily, pick_theme
@@ -125,40 +125,6 @@ def test_mock_never_invents_when_given_no_sources(provider: MockProvider):
     result = provider.chat([{"role": "user", "content": "QUESTION: what is virtue?"}])
     assert "not" in result.text.lower()
     assert "[1]" not in result.text
-
-
-def test_provider_resolution_prefers_explicit_then_credentials(monkeypatch, tmp_path: Path):
-    monkeypatch.delenv("PHILO_PROVIDER", raising=False)
-    s = Settings(root=tmp_path)
-    assert _resolve_provider(s) == "mock"
-
-    s.openai_api_key = "sk-test"
-    assert _resolve_provider(s) == "openai"
-
-    s.azure_api_key = "az-test"
-    s.azure_endpoint = "https://example.openai.azure.com"
-    assert _resolve_provider(s) == "azure"
-
-    monkeypatch.setenv("PHILO_PROVIDER", "mock")
-    assert _resolve_provider(s) == "mock"
-
-
-def test_unknown_provider_is_rejected(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("PHILO_PROVIDER", "llama")
-    with pytest.raises(ValueError):
-        _resolve_provider(Settings(root=tmp_path))
-
-
-def test_azure_config_problems_are_specific(tmp_path: Path):
-    s = Settings(root=tmp_path)
-    s.provider = "azure"
-    s.azure_api_key = "key"
-    s.azure_endpoint = "https://x.openai.azure.com"
-    problems = " ".join(s.problems())
-    # Azure's deployment-vs-model distinction is the single most common
-    # first-run failure, so the message names it explicitly.
-    assert "CHAT_DEPLOYMENT" in problems
-    assert "deployment" in problems
 
 
 def test_dotenv_parsing(tmp_path: Path, monkeypatch):

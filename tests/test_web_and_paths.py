@@ -53,6 +53,7 @@ def test_find_root_never_escapes_to_the_filesystem_root(tmp_path: Path, monkeypa
 
 
 def test_index_falls_back_to_the_user_home_outside_a_project(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("PHILO_PROVIDER", "mock")
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("PHILO_INDEX", raising=False)
     monkeypatch.delenv("PHILO_LIBRARY", raising=False)
@@ -63,6 +64,7 @@ def test_index_falls_back_to_the_user_home_outside_a_project(tmp_path: Path, mon
 
 
 def test_inside_a_checkout_paths_stay_local(tmp_path: Path, library: Path, monkeypatch):
+    monkeypatch.setenv("PHILO_PROVIDER", "mock")
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("PHILO_INDEX", raising=False)
     monkeypatch.delenv("PHILO_LIBRARY", raising=False)
@@ -72,6 +74,7 @@ def test_inside_a_checkout_paths_stay_local(tmp_path: Path, library: Path, monke
 
 
 def test_env_overrides_win(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("PHILO_PROVIDER", "mock")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PHILO_INDEX", str(tmp_path / "custom"))
     assert Settings.load().index_dir == tmp_path / "custom"
