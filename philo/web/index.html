@@ -364,12 +364,18 @@ function renderStatus(h) {
   if (!h.ok) {
     bits.push(`<span class="chip"><span class="dot bad"></span> no index</span>`);
   } else {
-    bits.push(h.offline
-      ? `<span class="chip"><span class="dot off"></span> <b>offline</b> mock provider</span>`
-      : `<span class="chip"><span class="dot live"></span> <b>${esc(h.provider_label)}</b></span>`);
+    if (h.offline) {
+      bits.push(`<span class="chip"><span class="dot off"></span> <b>offline</b> mock provider</span>`);
+    } else {
+      bits.push(`<span class="chip"><span class="dot live"></span> <b>${esc(h.chat_provider)}</b> ${esc(h.chat_model || "")}</span>`);
+      // When the two halves come from different vendors, say so — the index
+      // belongs to the embedding side, not the one writing the answers.
+      if (h.split_providers) {
+        bits.push(`<span class="chip"><b>${esc(h.embed_provider)}</b> ${esc(h.embed_model || "")} · embeddings</span>`);
+      }
+    }
     bits.push(`<span class="chip"><b>${h.passages.toLocaleString()}</b> passages</span>`);
     bits.push(`<span class="chip"><b>${h.works}</b> works</span>`);
-    if (h.chat_model) bits.push(`<span class="chip">${esc(h.chat_model)}</span>`);
   }
   if (h.authenticated) bits.push(`<span class="chip"><span class="dot"></span> token required</span>`);
   $("#status").innerHTML = bits.join("");

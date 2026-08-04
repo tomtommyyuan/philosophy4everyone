@@ -231,9 +231,12 @@ def doctor_view(
     parts.append(rule("configuration"))
     parts.append(Text(""))
     rows: list[tuple[str, Any]] = [
-        ("provider", Text(settings.describe_provider(), style="brand")),
-        ("chat model", Text(provider.chat_model if provider else settings.chat_model_name)),
-        ("embed model", Text(provider.embed_model if provider else settings.embed_model_name)),
+        ("chat", Text(f"{settings.chat_provider or '—'} · "
+                      f"{provider.chat_model if provider else settings.chat_model_name}",
+                      style="brand")),
+        ("embeddings", Text(f"{settings.embed_provider or '—'} · "
+                            f"{provider.embed_model if provider else settings.embed_model_name}",
+                            style="brand" if settings.split_providers else "")),
         ("library", Text(str(settings.library_dir))),
         ("index", Text(str(settings.index_dir))),
         ("profiles", Text(str(settings.profiles_dir))),
@@ -292,14 +295,28 @@ def doctor_view(
         )
     parts.append(Padding(check_table, (0, 0, 0, 2)))
 
+    if settings.split_providers:
+        parts.append(Text(""))
+        parts.append(
+            hint(
+                f"Chat and embeddings come from different providers. The index is tied to "
+                f"'{settings.embed_provider}' — changing the chat model is free, changing the "
+                "embedding model needs `philo ingest --rebuild`."
+            )
+        )
     if settings.is_offline:
         parts.append(Text(""))
         parts.append(
             hint(
-                "Running offline. Set OPENAI_API_KEY (or the AZURE_OPENAI_* variables) "
-                "in .env, then re-run `philo ingest --rebuild`."
+                "Running offline. Export a key for OpenAI, Anthropic or Gemini, then "
+                "re-run `philo ingest --rebuild`."
             )
         )
+    if settings.config_error is not None:
+        parts.append(Text(""))
+        parts.append(Text(f"  {settings.config_error}", style="err"))
+        for line in str(getattr(settings.config_error, "hint", "")).splitlines():
+            parts.append(Text(f"  {line}", style="muted"))
     return Group(*parts)
 
 

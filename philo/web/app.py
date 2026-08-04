@@ -172,7 +172,10 @@ def create_app() -> FastAPI:
         settings = get_settings()
         payload: dict[str, Any] = {
             "version": __version__,
-            "provider": settings.provider,
+            "provider": settings.chat_provider,
+            "chat_provider": settings.chat_provider,
+            "embed_provider": settings.embed_provider,
+            "split_providers": settings.split_providers,
             "provider_label": settings.describe_provider(),
             "offline": settings.is_offline,
             "authenticated": bool(os.environ.get("PHILO_WEB_TOKEN", "").strip()),

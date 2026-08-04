@@ -14,7 +14,18 @@ from pathlib import Path
 
 from .util import env_bool, env_float, env_int, env_str, load_dotenv
 
-PROVIDERS = ("mock", "openai", "azure")
+# Who can do what. Anthropic publishes no embeddings endpoint, so it is a
+# chat provider only — see philo/providers/base.py for why that shapes the
+# whole layer.
+CHAT_PROVIDERS = ("openai", "azure", "anthropic", "gemini", "mock")
+EMBED_PROVIDERS = ("openai", "azure", "gemini", "mock")
+PROVIDERS = tuple(dict.fromkeys(CHAT_PROVIDERS + EMBED_PROVIDERS))
+
+# Order used when several sets of credentials are present. Azure comes first
+# because configuring it (endpoint plus two deployment names) is a deliberate
+# act, never something that happens by accident.
+CHAT_PREFERENCE = ("azure", "openai", "anthropic", "gemini")
+EMBED_PREFERENCE = ("azure", "openai", "gemini")
 
 # User-level home for an installed CLI that is not sitting in a checkout.
 USER_HOME = Path(env_str("PHILO_HOME", str(Path.home() / ".philo")))
@@ -92,8 +103,12 @@ class Settings:
     # case everything lives under ~/.philo.
     in_project: bool = field(init=False, default=False)
 
-    # ---- provider --------------------------------------------------------
-    provider: str = "mock"
+    # ---- providers -------------------------------------------------------
+    # Chat and embeddings are resolved independently; they are frequently the
+    # same vendor and occasionally must not be (Anthropic cannot embed).
+    chat_provider: str = "mock"
+    embed_provider: str = "mock"
+
     chat_model: str = "gpt-4o"
     embed_model: str = "text-embedding-3-small"
 
@@ -106,6 +121,19 @@ class Settings:
     azure_api_version: str = "2024-10-21"
     azure_chat_deployment: str = ""
     azure_embed_deployment: str = ""
+
+    anthropic_api_key: str = ""
+    anthropic_base_url: str = ""
+    anthropic_model: str = "claude-opus-5"
+    # Claude controls reasoning depth with `effort`, not `temperature`
+    # (sampling parameters are rejected outright by the Claude 5 family).
+    anthropic_effort: str = "medium"
+
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_embed_model: str = "gemini-embedding-001"
+    # 3072 by default; 768/1536 trade a little accuracy for a much smaller index.
+    gemini_embed_dim: int = 0
 
     # ---- generation ------------------------------------------------------
     temperature: float = 0.3
@@ -131,6 +159,10 @@ class Settings:
     # ---- misc ------------------------------------------------------------
     embed_batch_size: int = 64
     color: bool = True
+    # Set instead of raising when loaded non-strictly, so `philo doctor` can
+    # still run and explain the problem. Refusing to start *and* refusing to
+    # diagnose would be the worst of both.
+    config_error: Exception | None = None
 
     def __post_init__(self) -> None:
         # Inside a checkout everything lives beside the code. Installed via
@@ -146,7 +178,7 @@ class Settings:
 
     # ------------------------------------------------------------------
     @classmethod
-    def load(cls, root: Path | None = None, **overrides) -> "Settings":
+    def load(cls, root: Path | None = None, *, strict: bool = True, **overrides) -> "Settings":
         root = _find_root(root)
         load_dotenv(root / ".env")
 
@@ -164,7 +196,24 @@ class Settings:
             "AZURE_OPENAI_EMBED_DEPLOYMENT"
         )
 
-        s.provider = _resolve_provider(s)
+        s.anthropic_api_key = env_str("ANTHROPIC_API_KEY")
+        s.anthropic_base_url = env_str("ANTHROPIC_BASE_URL")
+        s.anthropic_model = env_str("PHILO_ANTHROPIC_MODEL", s.anthropic_model)
+        s.anthropic_effort = env_str("PHILO_ANTHROPIC_EFFORT", s.anthropic_effort)
+
+        # GOOGLE_API_KEY is what the SDK itself reads, so accept both names.
+        s.gemini_api_key = env_str("GEMINI_API_KEY") or env_str("GOOGLE_API_KEY")
+        s.gemini_model = env_str("PHILO_GEMINI_MODEL", s.gemini_model)
+        s.gemini_embed_model = env_str("PHILO_GEMINI_EMBED_MODEL", s.gemini_embed_model)
+        s.gemini_embed_dim = env_int("PHILO_GEMINI_EMBED_DIM", s.gemini_embed_dim)
+
+        try:
+            s.chat_provider, s.embed_provider = resolve_providers(s)
+        except ConfigError as exc:
+            if strict:
+                raise
+            s.chat_provider = s.embed_provider = ""
+            s.config_error = exc
         s.chat_model = env_str("PHILO_CHAT_MODEL", s.chat_model)
         s.embed_model = env_str("PHILO_EMBED_MODEL", s.embed_model)
 
@@ -199,32 +248,63 @@ class Settings:
 
     # ------------------------------------------------------------------
     @property
+    def provider(self) -> str:
+        """The provider a user would name — the one writing the answers."""
+        return self.chat_provider
+
+    @property
     def is_offline(self) -> bool:
-        return self.provider == "mock"
+        return self.chat_provider == "mock" and self.embed_provider == "mock"
+
+    @property
+    def split_providers(self) -> bool:
+        return self.chat_provider != self.embed_provider
 
     @property
     def chat_model_name(self) -> str:
-        """What to actually put on the wire — Azure addresses deployments."""
-        if self.provider == "azure":
+        """What to actually put on the wire, per provider."""
+        if self.chat_provider == "azure":
             return self.azure_chat_deployment or self.chat_model
+        if self.chat_provider == "anthropic":
+            return self.anthropic_model
+        if self.chat_provider == "gemini":
+            return self.gemini_model
+        if self.chat_provider == "mock":
+            return "mock-sage-1"
         return self.chat_model
 
     @property
     def embed_model_name(self) -> str:
-        if self.provider == "azure":
+        if self.embed_provider == "azure":
             return self.azure_embed_deployment or self.embed_model
+        if self.embed_provider == "gemini":
+            return self.gemini_embed_model
+        if self.embed_provider == "mock":
+            return "mock-embed-384"
         return self.embed_model
 
     def describe_provider(self) -> str:
-        if self.provider == "mock":
+        chat = self._describe_one(self.chat_provider)
+        if not self.split_providers:
+            return chat
+        # Say both, because which one embedded the index determines whether
+        # that index can still be read.
+        return f"{chat} + {self._describe_one(self.embed_provider)} (embeddings)"
+
+    def _describe_one(self, provider: str) -> str:
+        if provider == "mock":
             return "mock · offline"
-        if self.provider == "azure":
+        if provider == "azure":
             host = self.azure_endpoint.replace("https://", "").split(".")[0] or "azure"
             return f"azure · {host}"
-        if self.openai_base_url:
+        if provider == "openai" and self.openai_base_url:
             host = self.openai_base_url.replace("https://", "").split("/")[0]
             return f"openai · {host}"
-        return "openai"
+        return provider
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.chat_provider and self.embed_provider) and self.config_error is None
 
     def problems(self) -> list[str]:
         """Configuration errors that would make a real API call fail.
@@ -232,48 +312,171 @@ class Settings:
         Surfaced by `philo doctor` and checked before any live request, so the
         failure message is about config rather than an opaque HTTP 401.
         """
+        if self.config_error is not None:
+            return [str(self.config_error)]
         issues: list[str] = []
-        if self.provider == "openai":
-            if not self.openai_api_key:
-                issues.append("OPENAI_API_KEY is not set")
-        elif self.provider == "azure":
+        for role, provider in (("chat", self.chat_provider), ("embedding", self.embed_provider)):
+            issues.extend(self._problems_for(role, provider))
+        return list(dict.fromkeys(issues))
+
+    def problems_for(self, provider: str) -> list[str]:
+        """Config errors for one vendor only.
+
+        A backend must not refuse to start because a *different* provider in
+        a split configuration is misconfigured.
+        """
+        issues: list[str] = []
+        for role in ("chat", "embedding"):
+            if getattr(self, f"{role.replace('embedding', 'embed')}_provider") == provider:
+                issues.extend(self._problems_for(role, provider))
+        return list(dict.fromkeys(issues))
+
+    def _problems_for(self, role: str, provider: str) -> list[str]:
+        issues: list[str] = []
+        if provider == "openai" and not self.openai_api_key:
+            issues.append(f"OPENAI_API_KEY is not set (needed for {role})")
+        elif provider == "anthropic" and not self.anthropic_api_key:
+            issues.append("ANTHROPIC_API_KEY is not set")
+        elif provider == "gemini" and not self.gemini_api_key:
+            issues.append(f"GEMINI_API_KEY is not set (needed for {role})")
+        elif provider == "azure":
             if not self.azure_api_key:
                 issues.append("AZURE_OPENAI_API_KEY is not set")
             if not self.azure_endpoint:
                 issues.append("AZURE_OPENAI_ENDPOINT is not set")
-            if not self.azure_chat_deployment:
-                issues.append("AZURE_OPENAI_CHAT_DEPLOYMENT is not set (Azure addresses deployments, not model names)")
-            if not self.azure_embed_deployment:
+            if role == "chat" and not self.azure_chat_deployment:
+                issues.append(
+                    "AZURE_OPENAI_CHAT_DEPLOYMENT is not set "
+                    "(Azure addresses deployments, not model names)"
+                )
+            if role == "embedding" and not self.azure_embed_deployment:
                 issues.append("AZURE_OPENAI_EMBEDDING_DEPLOYMENT is not set")
-        if self.provider != "mock":
+
+        package = {"openai": "openai", "azure": "openai",
+                   "anthropic": "anthropic", "gemini": "google-genai"}.get(provider)
+        extra = {"openai": "openai", "azure": "openai",
+                 "anthropic": "anthropic", "gemini": "gemini"}.get(provider)
+        if package:
             try:
-                import openai  # noqa: F401
+                __import__(package.replace("-", "_") if package != "google-genai" else "google.genai")
             except ImportError:
-                issues.append("the `openai` package is not installed — run: pip install 'philo[openai]'")
+                issues.append(
+                    f"the `{package}` package is not installed — run: pip install 'philo[{extra}]'"
+                )
         return issues
 
 
-def _resolve_provider(s: Settings) -> str:
-    """Explicit env wins; otherwise pick whatever is actually usable."""
-    requested = env_str("PHILO_PROVIDER").lower()
-    if requested in PROVIDERS:
-        return requested
-    if requested:
-        raise ValueError(f"PHILO_PROVIDER={requested!r} is not one of {PROVIDERS}")
-    if s.azure_api_key and s.azure_endpoint:
-        return "azure"
-    if s.openai_api_key:
-        return "openai"
-    return "mock"
+class ConfigError(RuntimeError):
+    """The provider configuration cannot produce a working system."""
+
+    def __init__(self, message: str, *, hint: str = ""):
+        super().__init__(message)
+        self.hint = hint
+
+
+SETUP_HELP = """Set one of these and re-run:
+
+  export OPENAI_API_KEY=sk-...                 # chat + embeddings
+  export ANTHROPIC_API_KEY=sk-ant-...          # chat only, needs an embedding key too
+  export GEMINI_API_KEY=...                    # chat + embeddings
+  export AZURE_OPENAI_API_KEY=...  AZURE_OPENAI_ENDPOINT=https://<res>.openai.azure.com \
+         AZURE_OPENAI_CHAT_DEPLOYMENT=...  AZURE_OPENAI_EMBEDDING_DEPLOYMENT=...
+
+Or run entirely offline with no key at all:
+
+  export PHILO_PROVIDER=mock"""
+
+
+def has_credentials(s: Settings, provider: str) -> bool:
+    """Whether `provider` has everything it needs to make a call."""
+    if provider == "mock":
+        return True
+    if provider == "azure":
+        return bool(s.azure_api_key and s.azure_endpoint)
+    if provider == "openai":
+        return bool(s.openai_api_key)
+    if provider == "anthropic":
+        return bool(s.anthropic_api_key)
+    if provider == "gemini":
+        return bool(s.gemini_api_key)
+    return False
+
+
+def _requested(name: str, allowed: tuple[str, ...]) -> str:
+    value = env_str(name).lower()
+    if not value:
+        return ""
+    if value not in allowed:
+        raise ConfigError(
+            f"{name}={value!r} is not one of {allowed}",
+            hint=(
+                "Anthropic has no embeddings endpoint, so it cannot be an embedding provider."
+                if value == "anthropic" and "anthropic" not in allowed
+                else f"Valid values: {', '.join(allowed)}."
+            ),
+        )
+    return value
+
+
+def resolve_providers(s: Settings) -> tuple[str, str]:
+    """Decide who writes answers and who builds vectors.
+
+    Explicit settings win; otherwise we pick the first provider in a fixed
+    preference order that actually has credentials. An API key is required —
+    with nothing configured this raises rather than silently falling back to
+    the offline mock, because a system that quietly stops calling real models
+    is worse than one that refuses to start.
+    """
+    both = _requested("PHILO_PROVIDER", PROVIDERS)
+    chat = _requested("PHILO_CHAT_PROVIDER", CHAT_PROVIDERS)
+    embed = _requested("PHILO_EMBED_PROVIDER", EMBED_PROVIDERS)
+
+    if both and not chat:
+        chat = both
+    # `PHILO_PROVIDER=anthropic` cannot set the embedding side; it falls
+    # through to auto-detection below.
+    if both and not embed and both in EMBED_PROVIDERS:
+        embed = both
+
+    if not chat:
+        chat = next((p for p in CHAT_PREFERENCE if has_credentials(s, p)), "")
+    if not embed:
+        embed = next((p for p in EMBED_PREFERENCE if has_credentials(s, p)), "")
+
+    if not chat and not embed:
+        raise ConfigError("no API key found for any provider", hint=SETUP_HELP)
+    if not chat:
+        raise ConfigError(
+            "no chat provider is configured", hint=SETUP_HELP
+        )
+    if not embed:
+        raise ConfigError(
+            f"'{chat}' is configured for chat, but nothing can produce embeddings"
+            + (" — Anthropic has no embeddings endpoint" if chat == "anthropic" else ""),
+            hint=(
+                "Add an embedding provider alongside it:\n\n"
+                "  export OPENAI_API_KEY=sk-...      # text-embedding-3-small\n"
+                "  export GEMINI_API_KEY=...         # gemini-embedding-001\n\n"
+                "Or select one explicitly with PHILO_EMBED_PROVIDER."
+            ),
+        )
+
+    for role, provider in (("chat", chat), ("embedding", embed)):
+        if not has_credentials(s, provider):
+            raise ConfigError(
+                f"'{provider}' was selected for {role} but its credentials are missing",
+                hint=SETUP_HELP,
+            )
+    return chat, embed
 
 
 _settings: Settings | None = None
 
 
-def get_settings(reload: bool = False, **overrides) -> Settings:
+def get_settings(reload: bool = False, *, strict: bool = True, **overrides) -> Settings:
     global _settings
     if _settings is None or reload or overrides:
-        _settings = Settings.load(**overrides)
+        _settings = Settings.load(strict=strict, **overrides)
     return _settings
 
 
@@ -281,13 +484,20 @@ def env_report() -> list[tuple[str, str, bool]]:
     """(name, displayed value, is_set) for `philo doctor`.  Secrets masked."""
     names = [
         ("PHILO_PROVIDER", False),
-        ("PHILO_CHAT_MODEL", False),
-        ("PHILO_EMBED_MODEL", False),
+        ("PHILO_CHAT_PROVIDER", False),
+        ("PHILO_EMBED_PROVIDER", False),
         ("OPENAI_API_KEY", True),
         ("OPENAI_BASE_URL", False),
+        ("PHILO_CHAT_MODEL", False),
+        ("PHILO_EMBED_MODEL", False),
+        ("ANTHROPIC_API_KEY", True),
+        ("PHILO_ANTHROPIC_MODEL", False),
+        ("PHILO_ANTHROPIC_EFFORT", False),
+        ("GEMINI_API_KEY", True),
+        ("PHILO_GEMINI_MODEL", False),
+        ("PHILO_GEMINI_EMBED_MODEL", False),
         ("AZURE_OPENAI_API_KEY", True),
         ("AZURE_OPENAI_ENDPOINT", False),
-        ("AZURE_OPENAI_API_VERSION", False),
         ("AZURE_OPENAI_CHAT_DEPLOYMENT", False),
         ("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", False),
     ]

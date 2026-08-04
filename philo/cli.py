@@ -21,7 +21,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
-from .config import USER_HOME, Settings, get_settings
+from .config import USER_HOME, ConfigError, Settings, get_settings
 from .corpus.gutenberg import SOURCES, fetch_all, select
 from .corpus.ingest import ingest, preview_chunks
 from .corpus.loader import CorpusError
@@ -203,9 +203,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         console.print(help_view(COMMANDS, version=__version__))
         return EXIT_OK
 
-    settings = get_settings(reload=True)
+    # Loaded leniently: a missing key must not stop `philo doctor` from
+    # explaining what is missing.
+    settings = get_settings(reload=True, strict=False)
     if args.no_color:
         settings.color = False
+
+    if not settings.ready and args.command not in ("doctor", "version", "init"):
+        error = settings.config_error
+        console.print(
+            error_panel(
+                "configuration",
+                str(error) if error else "no provider is configured",
+                hint_text=getattr(error, "hint", "") or "Run `philo doctor` for the full picture.",
+            )
+        )
+        return EXIT_USAGE
 
     handlers = {
         "init": cmd_init,
@@ -237,6 +250,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except CorpusError as exc:
         console.print(error_panel("library", str(exc)))
         return EXIT_ERROR
+    except ConfigError as exc:
+        console.print(error_panel("configuration", str(exc), hint_text=exc.hint))
+        return EXIT_USAGE
     except FileNotFoundError as exc:
         console.print(error_panel("not found", str(exc)))
         return EXIT_ERROR
@@ -293,13 +309,12 @@ def _provider_line(settings: Settings, provider: Any | None = None) -> Text:
     answer on screen.
     """
     provider = provider or get_provider(settings)
-    return status_bar(
-        [
-            ("provider", settings.describe_provider()),
-            ("chat", provider.chat_model),
-            ("embed", provider.embed_model),
-        ]
-    )
+    bits = [("chat", f"{settings.chat_provider} · {provider.chat_model}")]
+    if settings.split_providers:
+        bits.append(("embed", f"{settings.embed_provider} · {provider.embed_model}"))
+    else:
+        bits.append(("embed", provider.embed_model))
+    return status_bar(bits)
 
 
 # --------------------------------------------------------------------------
@@ -1074,8 +1089,10 @@ def cmd_doctor(args: argparse.Namespace, settings: Settings, console: Console) -
     _header(console, settings)
 
     index_info: dict[str, Any] | None = None
-    provider = get_provider(settings)
+    provider = get_provider(settings) if settings.ready else None
     try:
+        if provider is None:
+            raise IndexError_("no provider configured", hint="See the errors above.")
         store = VectorStore(settings.index_dir).load(
             expect_model=provider.embed_model, expect_provider=provider.name
         )
@@ -1090,7 +1107,7 @@ def cmd_doctor(args: argparse.Namespace, settings: Settings, console: Console) -
         index_info = {"ok": False, "detail": str(exc)}
 
     provider_status: tuple[bool, str] | None = None
-    if args.probe:
+    if args.probe and settings.ready:
         with Spinner(console, "probing the provider"):
             try:
                 provider_status = (True, get_provider(settings).healthcheck())
@@ -1102,9 +1119,9 @@ def cmd_doctor(args: argparse.Namespace, settings: Settings, console: Console) -
     console.print(doctor_view(settings, provider=provider, index_info=index_info,
                               provider_status=provider_status))
     console.print()
-    if not args.probe and not settings.is_offline:
-        console.print(hint("philo doctor --probe makes one tiny real API call to verify the key"))
-    return EXIT_OK
+    if not args.probe and settings.ready and not settings.is_offline:
+        console.print(hint("philo doctor --probe makes one tiny real API call to verify each key"))
+    return EXIT_OK if settings.ready else EXIT_USAGE
 
 
 if __name__ == "__main__":  # pragma: no cover
