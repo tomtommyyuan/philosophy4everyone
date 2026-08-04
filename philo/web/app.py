@@ -1,0 +1,311 @@
+"""The HTTP layer.
+
+A plain ASGI app, so the same code serves `philo serve` on localhost and a
+serverless deployment on Vercel, Fly or Render without modification.
+
+Three things here are not incidental:
+
+*The engine is a process-level singleton.* Loading the index and building the
+BM25 table costs a few hundred milliseconds; doing it per request would
+dominate the response time. On a warm serverless instance this is paid once.
+
+*Endpoints are sync `def`.* Starlette runs those in a threadpool, which is
+exactly right for the blocking OpenAI SDK — an `async def` calling it would
+stall the event loop for every other request.
+
+*A shared-secret gate.* Any public deployment of this app spends *your* API
+credits on behalf of whoever finds the URL. `PHILO_WEB_TOKEN` is unset by
+default (localhost is your own machine) but the moment the app is reachable
+from the internet it should be set.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import queue
+import threading
+from pathlib import Path
+from typing import Any, Iterator
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from pydantic import BaseModel, Field
+
+from .. import __version__
+from ..config import Settings, get_settings
+from ..generation.answerer import AskOptions, Engine
+from ..personalize.daily import generate_daily
+from ..personalize.profile import DEFAULT_PROFILE_NAME, Profile
+from ..providers import get_provider
+from ..providers.base import ProviderError
+from ..store.vector_store import Filters, IndexError_
+from ..util import detect_language
+
+PAGE = Path(__file__).with_name("index.html")
+
+MAX_K = 12
+MAX_QUESTION_CHARS = 600
+
+
+# --------------------------------------------------------------------------
+# Engine lifecycle
+# --------------------------------------------------------------------------
+
+_engine: Engine | None = None
+_engine_error: str = ""
+_lock = threading.Lock()
+
+
+def get_engine() -> Engine:
+    """Build the engine once per process; report a missing index cleanly."""
+    global _engine, _engine_error
+    if _engine is not None:
+        return _engine
+    with _lock:
+        if _engine is None:
+            settings = get_settings()
+            engine = Engine(settings, get_provider(settings))
+            try:
+                engine.store  # forces the index load, and the model-match check
+            except IndexError_ as exc:
+                _engine_error = f"{exc} — {exc.hint}"
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": str(exc), "hint": exc.hint},
+                ) from exc
+            _engine = engine
+    return _engine
+
+
+def reset_engine() -> None:
+    """Drop the cached engine — used by tests and after a re-ingest."""
+    global _engine, _engine_error
+    with _lock:
+        _engine, _engine_error = None, ""
+
+
+# --------------------------------------------------------------------------
+# Auth
+# --------------------------------------------------------------------------
+
+
+def require_token(x_philo_token: str | None = Header(default=None)) -> None:
+    """Optional shared secret.
+
+    Unset means open, which is correct for `philo serve` on localhost and
+    wrong for anything with a public URL — see the module docstring.
+    """
+    expected = os.environ.get("PHILO_WEB_TOKEN", "").strip()
+    if not expected:
+        return
+    if not x_philo_token or x_philo_token.strip() != expected:
+        raise HTTPException(status_code=401, detail={"error": "missing or invalid X-Philo-Token"})
+
+
+# --------------------------------------------------------------------------
+# Schemas
+# --------------------------------------------------------------------------
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
+    k: int | None = Field(default=None, ge=1, le=MAX_K)
+    philosopher: str = ""
+    work: str = ""
+    tradition: str = ""
+    plain: bool = False
+    lang: str = ""
+    profile: str = ""
+
+
+def _filters(req: AskRequest) -> Filters:
+    return Filters(
+        philosopher=req.philosopher.strip(),
+        work=req.work.strip(),
+        tradition=req.tradition.strip(),
+    )
+
+
+def _options(req: AskRequest, settings: Settings) -> AskOptions:
+    profile = (
+        Profile.load_or_default(settings.profiles_dir, req.profile) if req.profile else None
+    )
+    return AskOptions(
+        k=req.k,
+        filters=_filters(req),
+        style="plain" if req.plain else "two-layer",
+        reader_note=profile.reader_note() if profile else "",
+        lang=req.lang or (profile.language if profile else "") or detect_language(req.question),
+    )
+
+
+# --------------------------------------------------------------------------
+# App
+# --------------------------------------------------------------------------
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="Philosophy for Everyone",
+        version=__version__,
+        description="Grounded, citation-first philosophy answers.",
+        docs_url="/api/docs",
+        openapi_url="/api/openapi.json",
+    )
+
+    # ---- page ----------------------------------------------------------
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def index() -> HTMLResponse:
+        return HTMLResponse(PAGE.read_text(encoding="utf-8"))
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        # A 204 must carry no body at all; a JSON `null` here makes the
+        # payload longer than the Content-Length the status implies, and
+        # uvicorn rejects the response.
+        return Response(status_code=204)
+
+    # ---- health --------------------------------------------------------
+    @app.get("/api/health")
+    def health() -> dict[str, Any]:
+        settings = get_settings()
+        payload: dict[str, Any] = {
+            "version": __version__,
+            "provider": settings.provider,
+            "provider_label": settings.describe_provider(),
+            "offline": settings.is_offline,
+            "authenticated": bool(os.environ.get("PHILO_WEB_TOKEN", "").strip()),
+            "library_dir": str(settings.library_dir),
+            "index_dir": str(settings.index_dir),
+            "ok": False,
+        }
+        try:
+            engine = get_engine()
+        except HTTPException as exc:
+            payload["error"] = exc.detail
+            return payload
+        payload.update(
+            ok=True,
+            chat_model=engine.provider.chat_model,
+            embed_model=engine.provider.embed_model,
+            passages=len(engine.store),
+            works=engine.store.manifest.n_works,
+            built_at=engine.store.manifest.built_at,
+        )
+        return payload
+
+    # ---- library -------------------------------------------------------
+    @app.get("/api/sources")
+    def sources(engine: Engine = Depends(get_engine)) -> dict[str, Any]:
+        rows = engine.store.works_summary()
+        return {
+            "works": rows,
+            "philosophers": sorted({r["philosopher"] for r in rows if r["philosopher"]}),
+            "traditions": sorted({r["tradition"] for r in rows if r["tradition"]}),
+            "tags": [{"tag": t, "count": n} for t, n in engine.store.tags()[:40]],
+            "passages": sum(r["n_chunks"] for r in rows),
+        }
+
+    # ---- retrieval only ------------------------------------------------
+    @app.get("/api/search", dependencies=[Depends(require_token)])
+    def search(
+        q: str = Query(min_length=1, max_length=MAX_QUESTION_CHARS),
+        k: int = Query(default=8, ge=1, le=MAX_K),
+        philosopher: str = "",
+        tradition: str = "",
+        engine: Engine = Depends(get_engine),
+    ) -> dict[str, Any]:
+        result = engine.retriever.search(
+            q, k=k, filters=Filters(philosopher=philosopher.strip(), tradition=tradition.strip())
+        )
+        return {
+            "query": q,
+            "n_candidates": result.n_candidates,
+            "best_score": result.best_score,
+            "took_ms": result.took_ms,
+            "hits": [h.to_dict() for h in result.hits],
+        }
+
+    # ---- ask -----------------------------------------------------------
+    @app.post("/api/ask", dependencies=[Depends(require_token)])
+    def ask(req: AskRequest, engine: Engine = Depends(get_engine)) -> dict[str, Any]:
+        settings = get_settings()
+        try:
+            answer, _ = engine.ask(req.question, _options(req, settings))
+        except ProviderError as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc), "hint": exc.hint}) from exc
+        return answer.to_dict()
+
+    @app.post("/api/ask/stream", dependencies=[Depends(require_token)])
+    def ask_stream(req: AskRequest, engine: Engine = Depends(get_engine)) -> StreamingResponse:
+        settings = get_settings()
+        options = _options(req, settings)
+
+        def events() -> Iterator[str]:
+            # The provider pushes deltas through a callback while this
+            # generator pulls; a queue plus a worker thread is what bridges
+            # the two without an async provider client.
+            channel: queue.Queue[tuple[str, Any]] = queue.Queue()
+
+            def run() -> None:
+                try:
+                    answer, _ = engine.ask(
+                        req.question, options, stream_cb=lambda d: channel.put(("delta", d))
+                    )
+                    channel.put(("done", answer.to_dict()))
+                except ProviderError as exc:
+                    channel.put(("error", {"error": str(exc), "hint": exc.hint}))
+                except Exception as exc:  # pragma: no cover - defensive
+                    channel.put(("error", {"error": str(exc), "hint": ""}))
+                finally:
+                    channel.put(("eof", None))
+
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            while True:
+                kind, payload = channel.get()
+                if kind == "eof":
+                    break
+                yield f"event: {kind}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            worker.join(timeout=1.0)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",   # tell nginx-style proxies not to buffer
+                "Connection": "keep-alive",
+            },
+        )
+
+    # ---- daily ---------------------------------------------------------
+    @app.get("/api/daily", dependencies=[Depends(require_token)])
+    def daily(
+        profile: str = DEFAULT_PROFILE_NAME,
+        theme: str = "",
+        date: str = "",
+        k: int = Query(default=5, ge=1, le=MAX_K),
+        engine: Engine = Depends(get_engine),
+    ) -> dict[str, Any]:
+        settings = get_settings()
+        reader = Profile.load_or_default(settings.profiles_dir, profile)
+        try:
+            # Never persist history from a web request: a shared deployment
+            # would otherwise let one visitor's page view rewrite the
+            # rotation for everybody.
+            result = generate_daily(
+                engine, reader, settings, day=date, theme=theme, k=k, save=False
+            )
+        except ProviderError as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc), "hint": exc.hint}) from exc
+        payload = result.piece.to_dict()
+        payload["grounded"] = result.grounded
+        payload["took_ms"] = result.took_ms
+        return payload
+
+    return app
+
+
+app = create_app()

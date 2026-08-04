@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Philosophy for Everyone</title>
+<meta name="description" content="Grounded, citation-first philosophy answers drawn only from real primary texts.">
+<style>
+/* ------------------------------------------------------------------
+   Ink and candlelight — the same palette as the terminal UI.
+   Violet is structure and our own voice; amber is provenance and
+   nothing else is amber, so the eye learns that gold marks the parts
+   you can go and check.
+   ------------------------------------------------------------------ */
+:root {
+  --violet:#7c3aed; --violet-soft:#8b5cf6; --violet-dim:#ede9fe;
+  --amber:#b45309; --amber-soft:#d97706; --amber-bg:#fef3c7;
+  --ink:#1b1b22; --muted:#5b6273; --faint:#8a91a3;
+  --bg:#fbfaf7; --panel:#ffffff; --line:#e6e2da; --line-soft:#f0ece4;
+  --ok:#047857; --warn:#b45309; --err:#b91c1c;
+  --shadow:0 1px 2px rgba(20,18,30,.04), 0 8px 24px -12px rgba(20,18,30,.14);
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,ui-serif,serif;
+  --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  --radius:14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --violet:#a78bfa; --violet-soft:#c4b5fd; --violet-dim:#241d3b;
+    --amber:#f0b429; --amber-soft:#fcd34d; --amber-bg:#2a2110;
+    --ink:#e6e8ee; --muted:#9aa2b4; --faint:#6b7280;
+    --bg:#0c0d12; --panel:#14161d; --line:#242833; --line-soft:#1b1e27;
+    --ok:#34d399; --warn:#fbbf24; --err:#f87171;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 32px -16px rgba(0,0,0,.7);
+  }
+}
+* { box-sizing:border-box; }
+html,body { margin:0; padding:0; }
+body {
+  background:var(--bg); color:var(--ink);
+  font-family:var(--sans); font-size:16px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+a { color:var(--violet); }
+.wrap { max-width:980px; margin:0 auto; padding:0 20px 96px; }
+
+/* ---- header ---- */
+header { padding:44px 0 20px; }
+.brand {
+  font-family:var(--serif); font-size:clamp(21px,3.4vw,30px); font-weight:600;
+  letter-spacing:.14em; margin:0; line-height:1.25;
+  background:linear-gradient(100deg,var(--violet) 0%,var(--violet-soft) 38%,var(--amber-soft) 78%,var(--amber) 100%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.tagline { color:var(--muted); font-size:14px; margin:8px 0 0; }
+.statusbar { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; align-items:center; }
+.chip {
+  display:inline-flex; align-items:center; gap:7px;
+  font-size:12px; padding:5px 11px; border-radius:999px;
+  border:1px solid var(--line); background:var(--panel); color:var(--muted);
+  white-space:nowrap;
+}
+.chip b { color:var(--ink); font-weight:600; }
+.dot { width:7px; height:7px; border-radius:50%; background:var(--faint); flex:none; }
+.dot.live { background:var(--ok); } .dot.off { background:var(--amber); } .dot.bad { background:var(--err); }
+
+/* ---- tabs ---- */
+nav.tabs { display:flex; gap:4px; margin:26px 0 18px; border-bottom:1px solid var(--line); }
+nav.tabs button {
+  appearance:none; background:none; border:0; border-bottom:2px solid transparent;
+  color:var(--muted); font:inherit; font-size:14px; padding:9px 14px; cursor:pointer;
+  margin-bottom:-1px;
+}
+nav.tabs button:hover { color:var(--ink); }
+nav.tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:var(--violet); font-weight:600; }
+
+/* ---- ask form ---- */
+.askbox {
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+  padding:6px; box-shadow:var(--shadow);
+}
+.askrow { display:flex; gap:8px; align-items:flex-end; }
+textarea#q {
+  flex:1; resize:none; border:0; outline:none; background:transparent; color:var(--ink);
+  font-family:var(--serif); font-size:18px; line-height:1.5; padding:14px 14px 10px;
+  min-height:56px; max-height:200px;
+}
+textarea#q::placeholder { color:var(--faint); }
+button.primary {
+  appearance:none; border:0; border-radius:10px; cursor:pointer;
+  background:var(--violet); color:#fff; font:inherit; font-weight:600; font-size:14px;
+  padding:11px 20px; margin:0 6px 6px 0; white-space:nowrap;
+}
+button.primary:hover { filter:brightness(1.08); }
+button.primary:disabled { opacity:.55; cursor:default; }
+.filters { display:flex; flex-wrap:wrap; gap:8px; padding:0 8px 8px; align-items:center; }
+select, input.tok {
+  appearance:none; background:var(--bg); color:var(--muted); border:1px solid var(--line);
+  border-radius:8px; font:inherit; font-size:12.5px; padding:6px 10px;
+}
+label.toggle { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12.5px; }
+.hintline { color:var(--faint); font-size:12.5px; padding:0 8px 8px; }
+
+/* ---- cards ---- */
+.card {
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:var(--shadow); margin-top:18px; overflow:hidden;
+}
+.card > h2 {
+  margin:0; font-size:12.5px; font-weight:700; letter-spacing:.09em; text-transform:uppercase;
+  padding:13px 20px; border-bottom:1px solid var(--line-soft); color:var(--violet);
+  display:flex; align-items:center; gap:9px;
+}
+.card.amber > h2 { color:var(--amber); }
+.card > h2::before { content:"◗"; font-size:11px; }
+.card .body { padding:18px 22px 22px; }
+.card .body.serif { font-family:var(--serif); font-size:17.5px; line-height:1.68; }
+.card .body p { margin:0 0 .9em; }
+.card .body p:last-child { margin-bottom:0; }
+.card .body ul { margin:0 0 .9em; padding-left:1.15em; }
+.card .body li { margin:.3em 0; }
+.card .body blockquote {
+  margin:.9em 0; padding:2px 0 2px 16px; border-left:3px solid var(--amber);
+  color:var(--muted); font-style:italic;
+}
+.card .body strong { font-weight:650; }
+
+/* ---- citations ---- */
+.cite {
+  display:inline-block; font-family:var(--mono); font-size:11px; font-weight:700;
+  color:var(--amber); background:var(--amber-bg); border-radius:5px;
+  padding:1px 5px; margin:0 1px; cursor:pointer; vertical-align:.12em;
+  border:1px solid transparent; line-height:1.5;
+}
+.cite:hover { border-color:var(--amber); }
+
+/* ---- sources ---- */
+.sources { margin-top:18px; }
+.sources h3 {
+  font-size:12.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted);
+  margin:0 0 10px; font-weight:700;
+}
+.src {
+  border:1px solid var(--line); border-radius:12px; background:var(--panel);
+  margin-bottom:8px; overflow:hidden; transition:border-color .18s, box-shadow .18s;
+}
+.src.flash { border-color:var(--amber); box-shadow:0 0 0 3px var(--amber-bg); }
+.src > summary {
+  list-style:none; cursor:pointer; padding:12px 16px; display:flex; gap:12px; align-items:baseline;
+}
+.src > summary::-webkit-details-marker { display:none; }
+.src .n {
+  font-family:var(--mono); font-size:11px; font-weight:700; color:var(--amber);
+  background:var(--amber-bg); border-radius:5px; padding:2px 6px; flex:none;
+}
+.src .who { font-weight:650; color:var(--ink); font-size:14.5px; }
+.src .where { color:var(--muted); font-size:13px; }
+.src .meter { margin-left:auto; display:flex; align-items:center; gap:8px; flex:none; }
+.src .bar { width:54px; height:5px; border-radius:3px; background:var(--line); overflow:hidden; }
+.src .bar i { display:block; height:100%; background:var(--violet); }
+.src .score { font-family:var(--mono); font-size:11px; color:var(--faint); }
+.src .passage {
+  padding:2px 16px 16px 16px; font-family:var(--serif); font-size:15.5px;
+  color:var(--muted); line-height:1.66; white-space:pre-wrap;
+  border-top:1px solid var(--line-soft); margin-top:4px; padding-top:14px;
+}
+.src .credit { margin-top:10px; font-family:var(--sans); font-size:12px; color:var(--faint); }
+
+/* ---- daily ---- */
+.daily-title { font-family:var(--serif); font-size:25px; line-height:1.3; margin:0 0 14px; font-weight:600; }
+.practice {
+  margin-top:16px; border:1px solid var(--ok); border-radius:12px; padding:13px 16px;
+  background:color-mix(in srgb, var(--ok) 7%, transparent);
+}
+.practice b { color:var(--ok); display:block; font-size:12px; letter-spacing:.08em;
+  text-transform:uppercase; margin-bottom:5px; }
+
+/* ---- library ---- */
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th { text-align:left; font-size:11.5px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--muted); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line); }
+td { padding:9px 10px; border-bottom:1px solid var(--line-soft); }
+td.who { font-weight:600; }
+td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(--muted); }
+.tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:14px; }
+.tag { font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px;
+  padding:3px 10px; cursor:pointer; background:var(--panel); }
+.tag:hover { color:var(--ink); border-color:var(--violet); }
+
+/* ---- states ---- */
+.notice { border-radius:12px; padding:14px 18px; margin-top:18px; font-size:14.5px; }
+.notice.warn { border:1px solid var(--warn); background:color-mix(in srgb, var(--warn) 8%, transparent); }
+.notice.err  { border:1px solid var(--err);  background:color-mix(in srgb, var(--err) 8%, transparent); }
+.notice b { display:block; margin-bottom:4px; }
+.notice code { font-family:var(--mono); font-size:12.5px; background:var(--bg); padding:1px 5px; border-radius:4px; }
+.streaming {
+  font-family:var(--serif); font-size:16px; color:var(--muted); white-space:pre-wrap;
+  max-height:340px; overflow:hidden; padding:18px 22px;
+}
+.pulse::after {
+  content:"▋"; color:var(--violet); animation:blink 1.05s steps(2,start) infinite; margin-left:1px;
+}
+@keyframes blink { to { visibility:hidden; } }
+.spinner { display:inline-block; width:13px; height:13px; border:2px solid var(--line);
+  border-top-color:var(--violet); border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.foot { margin-top:14px; color:var(--faint); font-size:12.5px; font-family:var(--mono); }
+.hidden { display:none !important; }
+.examples { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+.examples button {
+  appearance:none; background:var(--panel); border:1px solid var(--line); border-radius:999px;
+  color:var(--muted); font:inherit; font-size:13px; padding:6px 14px; cursor:pointer;
+  font-family:var(--serif);
+}
+.examples button:hover { color:var(--ink); border-color:var(--violet); }
+@media (max-width:640px) {
+  .askrow { flex-direction:column; align-items:stretch; }
+  button.primary { margin:0 6px 6px; }
+  .src .meter { display:none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1 class="brand">PHILOSOPHY FOR EVERYONE</h1>
+  <p class="tagline">Every claim carries its source · 每一句都有出处</p>
+  <div class="statusbar" id="status">
+    <span class="chip"><span class="dot"></span> connecting…</span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="ask" aria-selected="true">Ask</button>
+  <button role="tab" data-tab="daily" aria-selected="false">Daily</button>
+  <button role="tab" data-tab="library" aria-selected="false">Library</button>
+</nav>
+
+<!-- ============================ ASK ============================ -->
+<section id="tab-ask">
+  <form class="askbox" id="askform">
+    <div class="askrow">
+      <textarea id="q" rows="1" placeholder="Why should I not fear death?" autocomplete="off"></textarea>
+      <button class="primary" id="asksubmit" type="submit">Ask</button>
+    </div>
+    <div class="filters">
+      <select id="f-philosopher"><option value="">Every philosopher</option></select>
+      <select id="f-tradition"><option value="">Every tradition</option></select>
+      <select id="f-k">
+        <option value="">6 passages</option>
+        <option value="3">3 passages</option>
+        <option value="8">8 passages</option>
+        <option value="12">12 passages</option>
+      </select>
+      <label class="toggle"><input type="checkbox" id="f-plain"> Plain language only</label>
+      <input class="tok hidden" id="f-token" type="password" placeholder="access token" autocomplete="off">
+    </div>
+    <div class="hintline">Answers are drawn only from the indexed texts. If nothing relevant is found, you get a refusal rather than a guess.</div>
+  </form>
+
+  <div class="examples" id="examples"></div>
+  <div id="ask-out"></div>
+</section>
+
+<!-- ============================ DAILY ============================ -->
+<section id="tab-daily" class="hidden">
+  <form class="askbox" id="dailyform">
+    <div class="askrow">
+      <textarea id="theme" rows="1" placeholder="Leave blank for today's theme, or name one — grief, work, free will…"></textarea>
+      <button class="primary" type="submit">Compose</button>
+    </div>
+    <div class="hintline">One short, fully sourced piece. The theme is chosen deterministically from the date and the reader profile, so the same day always gives the same piece.</div>
+  </form>
+  <div id="daily-out"></div>
+</section>
+
+<!-- ============================ LIBRARY ============================ -->
+<section id="tab-library" class="hidden">
+  <div class="card">
+    <h2>What is indexed</h2>
+    <div class="body" id="library-out"><span class="spinner"></span></div>
+  </div>
+</section>
+
+</div>
+
+<script>
+"use strict";
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+const TOKEN_KEY = "philo.token";
+let HEALTH = null;
+
+/* ---------------- tiny markdown renderer ----------------
+   No CDN is allowed (the page must work offline and inside a strict
+   deployment), and the model returns light markdown. This covers exactly
+   what it emits: paragraphs, bullets, blockquotes, bold, italics — plus
+   the [n] citation markers, which become clickable amber pills. */
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
+function inline(s) {
+  return esc(s)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/\[(\d{1,2})\]/g, '<sup class="cite" data-n="$1" title="jump to source $1">$1</sup>');
+}
+function markdown(src) {
+  if (!src) return "";
+  const out = [];
+  let list = null, quote = null;
+  const flush = () => {
+    if (list) { out.push("<ul>" + list.map(li => `<li>${inline(li)}</li>`).join("") + "</ul>"); list = null; }
+    if (quote) { out.push(`<blockquote>${inline(quote.join(" "))}</blockquote>`); quote = null; }
+  };
+  for (const raw of String(src).split(/\n/)) {
+    const line = raw.trim();
+    if (!line) { flush(); continue; }
+    if (/^([-*•]|\d+[.)])\s+/.test(line)) {
+      if (quote) flush();
+      (list ||= []).push(line.replace(/^([-*•]|\d+[.)])\s+/, ""));
+    } else if (/^>\s?/.test(line)) {
+      if (list) flush();
+      (quote ||= []).push(line.replace(/^>\s?/, ""));
+    } else if (/^#{1,6}\s+/.test(line)) {
+      flush();
+      out.push(`<p><strong>${inline(line.replace(/^#{1,6}\s+/, ""))}</strong></p>`);
+    } else {
+      if (list || quote) flush();
+      out.push(`<p>${inline(line)}</p>`);
+    }
+  }
+  flush();
+  return out.join("");
+}
+
+/* ---------------- api ---------------- */
+function headers() {
+  const h = { "Content-Type": "application/json" };
+  const t = localStorage.getItem(TOKEN_KEY);
+  if (t) h["X-Philo-Token"] = t;
+  return h;
+}
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { ...headers(), ...(opts.headers || {}) } });
+  const text = await res.text();
+  let data;
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text.slice(0, 400) }; }
+  if (!res.ok) {
+    const d = data && data.detail ? data.detail : data;
+    const err = new Error((d && d.error) || res.statusText || "request failed");
+    err.hint = (d && d.hint) || "";
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+/* ---------------- header ---------------- */
+function renderStatus(h) {
+  const bits = [];
+  if (!h.ok) {
+    bits.push(`<span class="chip"><span class="dot bad"></span> no index</span>`);
+  } else {
+    bits.push(h.offline
+      ? `<span class="chip"><span class="dot off"></span> <b>offline</b> mock provider</span>`
+      : `<span class="chip"><span class="dot live"></span> <b>${esc(h.provider_label)}</b></span>`);
+    bits.push(`<span class="chip"><b>${h.passages.toLocaleString()}</b> passages</span>`);
+    bits.push(`<span class="chip"><b>${h.works}</b> works</span>`);
+    if (h.chat_model) bits.push(`<span class="chip">${esc(h.chat_model)}</span>`);
+  }
+  if (h.authenticated) bits.push(`<span class="chip"><span class="dot"></span> token required</span>`);
+  $("#status").innerHTML = bits.join("");
+  $("#f-token").classList.toggle("hidden", !h.authenticated);
+}
+
+function setupNotice(h) {
+  if (h.ok) return;
+  const d = h.error || {};
+  $("#ask-out").innerHTML = `<div class="notice warn">
+      <b>The index is not built yet.</b>
+      ${esc(d.error || "No index found.")}
+      <p style="margin:.6em 0 0">Run these where the server is running:</p>
+      <p style="margin:.4em 0 0"><code>philo fetch</code> &nbsp;then&nbsp; <code>philo ingest</code></p>
+    </div>`;
+}
+
+/* ---------------- answer rendering ---------------- */
+function meter(score) {
+  const pct = Math.max(4, Math.min(100, Math.round(score * 100)));
+  return `<span class="meter"><span class="bar"><i style="width:${pct}%"></i></span>
+          <span class="score">${score.toFixed(2)}</span></span>`;
+}
+function sourceList(sources) {
+  if (!sources || !sources.length) return "";
+  const items = sources.map(s => {
+    const c = s.chunk;
+    const where = [c.work_title, c.section].filter(Boolean).join(" · ");
+    const credit = [c.translator && ("tr. " + c.translator), c.tradition, c.rights]
+      .filter(Boolean).map(esc).join(" &nbsp;·&nbsp; ");
+    return `<details class="src" id="src-${s.marker}">
+      <summary>
+        <span class="n">${s.marker}</span>
+        <span><span class="who">${esc(c.philosopher || "—")}</span>
+              <span class="where"> ${esc(where)}</span></span>
+        ${meter(s.score)}
+      </summary>
+      <div class="passage">${esc(c.text)}<div class="credit">${credit}</div></div>
+    </details>`;
+  }).join("");
+  return `<div class="sources"><h3>Sources · ${sources.length}</h3>${items}</div>`;
+}
+
+function renderAnswer(a) {
+  if (!a.grounded) {
+    return `<div class="notice warn"><b>Not in this library.</b>
+      ${markdown(a.plain)}</div>` + sourceList(a.sources);
+  }
+  let html = `<div class="card"><h2>In plain words</h2>
+      <div class="body serif">${markdown(a.plain)}</div></div>`;
+  if (a.academic && a.academic.trim()) {
+    html += `<div class="card amber"><h2>The argument</h2>
+      <div class="body">${markdown(a.academic)}</div></div>`;
+  }
+  html += sourceList(a.sources);
+  const bits = [`via ${esc(a.provider)}`, esc(a.model),
+                `${a.sources.length} sources`, `${a.latency_ms} ms`];
+  if (a.usage && a.usage.total_tokens) bits.push(`${a.usage.total_tokens} tokens`);
+  html += `<div class="foot">${bits.join("  ·  ")}</div>`;
+  if (a.invented_markers && a.invented_markers.length) {
+    html += `<div class="notice warn"><b>Citation markers were removed.</b>
+      The model produced ${a.invented_markers.map(n => "[" + n + "]").join(", ")},
+      which matched no retrieved passage.</div>`;
+  }
+  return html;
+}
+
+function wireCitations(root) {
+  $$(".cite", root).forEach(el => el.addEventListener("click", () => {
+    const target = $("#src-" + el.dataset.n);
+    if (!target) return;
+    target.open = true;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.add("flash");
+    setTimeout(() => target.classList.remove("flash"), 1400);
+  }));
+}
+function paint(where, html) {
+  const el = $(where);
+  el.innerHTML = html;
+  wireCitations(el);
+}
+function errorCard(err) {
+  return `<div class="notice err"><b>${esc(err.message)}</b>${err.hint ? esc(err.hint) : ""}</div>`;
+}
+
+/* ---------------- ask ---------------- */
+let busy = false;
+async function ask(question) {
+  if (busy || !question.trim()) return;
+  busy = true;
+  $("#asksubmit").disabled = true;
+  const body = JSON.stringify({
+    question,
+    k: $("#f-k").value ? Number($("#f-k").value) : null,
+    philosopher: $("#f-philosopher").value,
+    tradition: $("#f-tradition").value,
+    plain: $("#f-plain").checked,
+  });
+
+  const share = new URL(location.href);
+  share.searchParams.set("q", question);
+  history.replaceState(null, "", share);
+
+  paint("#ask-out", `<div class="card"><h2>Reading the sources</h2>
+      <div class="streaming pulse" id="live"></div></div>`);
+
+  try {
+    const res = await fetch("/api/ask/stream", { method: "POST", headers: headers(), body });
+    if (!res.ok || !res.body) throw await toError(res);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "", live = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let cut;
+      while ((cut = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, cut); buf = buf.slice(cut + 2);
+        const ev = /^event:\s*(.+)$/m.exec(frame);
+        const dt = /^data:\s*([\s\S]*)$/m.exec(frame);
+        if (!ev || !dt) continue;
+        const payload = JSON.parse(dt[1]);
+        if (ev[1] === "delta") {
+          live += payload;
+          const box = $("#live");
+          if (box) {
+            // Hide the structural headers while the draft is still forming;
+            // a half-written "## THE ARGU" is noise, not information.
+            box.textContent = live.replace(/^#{1,6}\s*[A-Z ]+$/gm, "").trimStart().slice(-1600);
+            box.scrollTop = box.scrollHeight;
+          }
+        } else if (ev[1] === "done") {
+          paint("#ask-out", renderAnswer(payload));
+        } else if (ev[1] === "error") {
+          paint("#ask-out", errorCard(Object.assign(new Error(payload.error), { hint: payload.hint })));
+        }
+      }
+    }
+  } catch (err) {
+    // Some proxies buffer or refuse streaming; the plain endpoint always works.
+    try {
+      const answer = await api("/api/ask", { method: "POST", body });
+      paint("#ask-out", renderAnswer(answer));
+    } catch (err2) {
+      paint("#ask-out", errorCard(err2));
+    }
+  } finally {
+    busy = false;
+    $("#asksubmit").disabled = false;
+  }
+}
+async function toError(res) {
+  let d = {};
+  try { d = (await res.json()).detail || {}; } catch {}
+  const e = new Error(d.error || res.statusText);
+  e.hint = d.hint || ""; e.status = res.status;
+  return e;
+}
+
+/* ---------------- daily ---------------- */
+async function daily(theme) {
+  paint("#daily-out", `<div class="card"><h2>Composing</h2>
+      <div class="streaming pulse">…</div></div>`);
+  try {
+    const p = await api("/api/daily?" + new URLSearchParams(theme ? { theme } : {}));
+    let html = `<div class="card"><h2>${esc(p.date)} · ${esc(p.theme)}</h2><div class="body serif">
+        <h3 class="daily-title">${esc(p.title)}</h3>${markdown(p.hook)}`;
+    if (p.quote) html += `<blockquote>${inline(p.quote)}</blockquote>`;
+    html += markdown(p.reflection);
+    if (p.practice) html += `<div class="practice"><b>Try this today</b>${esc(p.practice)}</div>`;
+    html += `</div></div>` + sourceList(p.sources);
+    paint("#daily-out", html);
+  } catch (err) {
+    paint("#daily-out", errorCard(err));
+  }
+}
+
+/* ---------------- library ---------------- */
+async function library() {
+  try {
+    const d = await api("/api/sources");
+    const rows = d.works.map(w => `<tr>
+        <td class="who">${esc(w.philosopher)}</td>
+        <td>${esc(w.work_title)}</td>
+        <td>${esc(w.tradition || "—")}</td>
+        <td>${esc(w.translator || "—")}</td>
+        <td class="num">${w.n_chunks}</td></tr>`).join("");
+    $("#library-out").innerHTML =
+      `<table><thead><tr><th>Philosopher</th><th>Work</th><th>Tradition</th>
+        <th>Translator</th><th style="text-align:right">Passages</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+       <div class="tags">${d.tags.map(t =>
+          `<span class="tag" data-tag="${esc(t.tag)}">${esc(t.tag)} ${t.count}</span>`).join("")}</div>`;
+    $$("#library-out .tag").forEach(el => el.addEventListener("click", () => {
+      switchTab("ask");
+      $("#q").value = "What do these texts say about " + el.dataset.tag.replace(/-/g, " ") + "?";
+      $("#q").focus();
+    }));
+  } catch (err) {
+    $("#library-out").innerHTML = errorCard(err);
+  }
+}
+
+/* ---------------- tabs ---------------- */
+function switchTab(name) {
+  $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
+  ["ask", "daily", "library"].forEach(t => $("#tab-" + t).classList.toggle("hidden", t !== name));
+  if (name === "library" && !$("#library-out").dataset.loaded) {
+    $("#library-out").dataset.loaded = "1";
+    library();
+  }
+  if (name === "daily" && !$("#daily-out").dataset.loaded) {
+    $("#daily-out").dataset.loaded = "1";
+    daily("");
+  }
+}
+
+/* ---------------- boot ---------------- */
+const EXAMPLES = [
+  "Why should I not fear death?",
+  "What is actually within my control?",
+  "Is it ever right to break the law?",
+  "What makes a life go well?",
+  "我该怎么面对焦虑？",
+];
+
+(async function boot() {
+  $$("nav.tabs button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+
+  $("#examples").innerHTML = EXAMPLES.map(e =>
+    `<button type="button">${esc(e)}</button>`).join("");
+  $$("#examples button").forEach(b => b.addEventListener("click", () => {
+    $("#q").value = b.textContent; ask(b.textContent);
+  }));
+
+  const q = $("#q");
+  const grow = () => { q.style.height = "auto"; q.style.height = Math.min(q.scrollHeight, 200) + "px"; };
+  q.addEventListener("input", grow);
+  q.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(q.value); }
+  });
+  $("#askform").addEventListener("submit", e => { e.preventDefault(); ask(q.value); });
+  $("#dailyform").addEventListener("submit", e => { e.preventDefault(); daily($("#theme").value.trim()); });
+
+  const tok = $("#f-token");
+  tok.value = localStorage.getItem(TOKEN_KEY) || "";
+  tok.addEventListener("change", () => localStorage.setItem(TOKEN_KEY, tok.value.trim()));
+
+  const params = new URLSearchParams(location.search);
+  if (params.get("tab")) switchTab(params.get("tab"));
+
+  try {
+    HEALTH = await api("/api/health");
+    renderStatus(HEALTH);
+    setupNotice(HEALTH);
+    if (HEALTH.ok) {
+      const d = await api("/api/sources");
+      $("#f-philosopher").innerHTML = '<option value="">Every philosopher</option>' +
+        d.philosophers.map(p => `<option>${esc(p)}</option>`).join("");
+      $("#f-tradition").innerHTML = '<option value="">Every tradition</option>' +
+        d.traditions.map(t => `<option>${esc(t)}</option>`).join("");
+
+      const asked = params.get("q");
+      if (asked) { q.value = asked; grow(); ask(asked); }
+    }
+  } catch (err) {
+    $("#status").innerHTML = `<span class="chip"><span class="dot bad"></span> ${esc(err.message)}</span>`;
+  }
+})();
+</script>
+</body>
+</html>
