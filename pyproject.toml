@@ -17,13 +17,18 @@ keywords = ["philosophy", "rag", "retrieval", "openai", "azure", "cli"]
 dependencies = ["rich>=13.0"]
 
 [project.optional-dependencies]
-# Real model providers. Not needed for the offline `mock` provider.
+# Model providers. None are needed for the offline `mock` provider.
 openai = ["openai>=1.30"]
+anthropic = ["anthropic>=0.40"]
+gemini = ["google-genai>=1.0"]
 # ~50x faster similarity search. Pure-Python fallback used when absent.
 fast = ["numpy>=1.24"]
 # The HTTP interface (`philo serve`, and any hosted deployment).
 web = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
-all = ["openai>=1.30", "numpy>=1.24", "fastapi>=0.110", "uvicorn[standard]>=0.27"]
+all = [
+  "openai>=1.30", "anthropic>=0.40", "google-genai>=1.0",
+  "numpy>=1.24", "fastapi>=0.110", "uvicorn[standard]>=0.27",
+]
 
 [project.scripts]
 philo = "philo.cli:main"
