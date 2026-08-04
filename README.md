@@ -2,10 +2,11 @@
 
 **让哲学说人话 — without letting it make things up.**
 
-A retrieval-augmented philosophy companion for the terminal. It answers questions
-about philosophy using only passages retrieved from real primary texts, shows you
-exactly which book and chapter each claim came from, and explains everything twice:
-once in ordinary language, once with the argument laid out properly.
+A retrieval-augmented philosophy companion, in your terminal or your browser. It
+answers questions about philosophy using only passages retrieved from real primary
+texts, shows you exactly which book and chapter each claim came from, and explains
+everything twice: once in ordinary language, once with the argument laid out
+properly.
 
 ```
 philo ask "why should I not fear death?"
@@ -74,9 +75,18 @@ Offline, no API key, about thirty seconds:
 
 ```bash
 make setup                                   # venv + install
-.venv/bin/python scripts/fetch_library.py    # download 14 public-domain works
+.venv/bin/python -m philo fetch              # download 14 public-domain works
 .venv/bin/python -m philo ingest             # chunk, embed, index (~3s offline)
 .venv/bin/python -m philo ask "what is actually within my control?"
+.venv/bin/python -m philo serve --open       # …or use it in a browser
+```
+
+Or install it as a normal command-line tool, no checkout required:
+
+```bash
+pipx install "git+https://github.com/tomtommyyuan/philosophy4everyone"
+philo fetch && philo ingest        # texts and index land in ~/.philo
+philo ask "why do we fear death?"
 ```
 
 That runs entirely on the built-in **mock provider** — no network, no key, no cost.
@@ -103,6 +113,8 @@ comparing them produces confident nonsense rather than an error.
 | Command | What it does |
 |---|---|
 | `philo ask "question"` | Answer from the texts, with sources |
+| `philo serve` | Web interface at `http://localhost:8000` |
+| `philo fetch` | Download the public-domain texts into the library |
 | `philo chat` | Conversation that remembers the last few turns |
 | `philo daily` | Today's personalised "Daily Philosophy" |
 | `philo search "query"` | Retrieval only — see exactly what the model would be sent |
@@ -111,6 +123,10 @@ comparing them produces confident nonsense rather than an error.
 | `philo profile show\|list\|set` | Who the daily piece is written for |
 | `philo doctor [--probe]` | Check configuration, index and connectivity |
 | `philo init` | Create `.env`, a profile, and a first index |
+
+Where things live: inside a checkout, the library and index sit beside the code.
+Installed via pip there is no checkout, so both go to `~/.philo` (override with
+`PHILO_HOME`, `PHILO_LIBRARY`, `PHILO_INDEX`).
 
 Useful flags:
 
@@ -127,6 +143,65 @@ philo daily --profile yucheng --theme "grief"
 `philo search` is the debugging tool worth knowing: it shows the blended score,
 the embedding score and the BM25 score for each passage, so when an answer looks
 wrong you can tell whether retrieval or generation is at fault.
+
+---
+
+## The web interface
+
+```bash
+philo serve --open          # http://localhost:8000
+```
+
+The same engine, same prompts, same grounding — rendered as a page instead of a
+terminal. Two-layer answers, amber citation markers that jump to the passage
+they cite, expandable source text so a claim is one click from its evidence, and
+answers that stream token by token. It follows your system light/dark setting
+and is one self-contained HTML file with no external requests, so it works
+offline and inside a strict content-security policy.
+
+Questions live in the URL (`/?q=why+do+we+fear+death`), so an answer is
+shareable.
+
+The API is a plain ASGI app (`philo.web.app:app`) and is documented at
+`/api/docs`:
+
+| Endpoint | |
+|---|---|
+| `POST /api/ask` | grounded answer as JSON |
+| `POST /api/ask/stream` | the same, as server-sent events |
+| `GET /api/daily` | today's personalised piece |
+| `GET /api/search` | retrieval only, with scores |
+| `GET /api/sources` | what is indexed |
+| `GET /api/health` | provider, index and passage counts |
+
+## Deploying
+
+Full guide in **[deploy/README.md](deploy/README.md)**. The short version:
+
+```bash
+docker build -t philo . && docker run --rm -p 8000:8000 philo
+```
+
+A container is the right shape for this app — it is a stateful index plus a
+small server, and the image bakes the texts and an offline index in at build
+time so a cold start answers immediately. That works on Fly.io, Render,
+Railway and Cloud Run, all of which honour the `PORT` the image reads.
+
+Vercel works too (`vercel.json` and `api/index.py` are included), but a
+serverless function has no persistent disk, so the index must be built locally
+and committed:
+
+```bash
+make deploy-index && git add -f deploy/index
+vercel --prod
+```
+
+> **Before you put this on a public URL:** every request spends *your* API
+> credits, and this app has no per-user metering. Set `PHILO_WEB_TOKEN` to a
+> random string and the API will require it as an `X-Philo-Token` header — the
+> page has a field for it. `philo serve --host 0.0.0.0` warns you when it is
+> unset. For a demo that cannot cost anything, deploy with
+> `PHILO_PROVIDER=mock`.
 
 ---
 
@@ -309,7 +384,7 @@ turns the resulting 404 into a message that says so.
 ## Development
 
 ```bash
-make test                     # 78 tests, offline, no key required
+make test                     # 97 tests, offline, no key required
 .venv/bin/python -m pytest tests -q
 ```
 
@@ -329,12 +404,16 @@ philo/
   generation/          prompts, grounding, two-layer parsing, marker audit
   personalize/         profiles and the daily piece
   ui/                  theme, components, views (Rich)
-  cli.py               the eight commands
-scripts/fetch_library.py   builds library/ from Project Gutenberg
+  web/                 ASGI app + the single-page interface
+  corpus/gutenberg.py  the Project Gutenberg fetcher (`philo fetch`)
+  cli.py               the commands
+Dockerfile             container image, index baked in
+api/ + vercel.json     serverless adapter
 ```
 
 `rich` is the only hard dependency. `numpy` is optional (≈50× faster search;
-pure-Python fallback otherwise) and `openai` is only needed for real providers.
+pure-Python fallback otherwise), `openai` is only needed for real providers, and
+`fastapi`/`uvicorn` only for `philo serve` — `pip install "philo[web]"`.
 
 ---
 
