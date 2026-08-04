@@ -1,0 +1,6 @@
+# Vercel installs this for the serverless function.
+# Local development uses pyproject.toml — `pip install -e ".[all]"`.
+rich>=13.0
+fastapi>=0.110
+numpy>=1.24
+openai>=1.30

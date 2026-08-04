@@ -1,0 +1,13 @@
+.venv/
+.philo/
+.cache/
+.git/
+tests/
+library/
+deploy/
+build/
+dist/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.env

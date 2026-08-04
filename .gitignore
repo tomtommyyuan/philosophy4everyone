@@ -6,8 +6,11 @@
 # generated index — rebuild with `philo ingest`
 .philo/
 
-# downloaded source texts cache — rebuild with scripts/fetch_library.py
+# downloaded source texts cache — rebuild with `philo fetch`
 .cache/
+
+# prebuilt index for serverless deploys — commit deliberately with `git add -f`
+deploy/index/
 
 # python
 __pycache__/

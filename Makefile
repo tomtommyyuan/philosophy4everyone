@@ -1,6 +1,7 @@
 .PHONY: help setup library ingest test ask daily doctor clean
 
 help:
+	@echo "make serve    open the web interface at http://localhost:8000"
 	@echo "make setup    create a venv and install philo"
 	@echo "make library  download the public-domain texts from Project Gutenberg"
 	@echo "make ingest   chunk, embed and index the library"
@@ -32,3 +33,15 @@ doctor:
 
 clean:
 	rm -rf .philo .pytest_cache **/__pycache__
+
+.PHONY: serve deploy-index docker
+
+serve:
+	.venv/bin/python -m philo serve --open
+
+deploy-index:
+	PHILO_INDEX=deploy/index .venv/bin/python -m philo ingest --rebuild
+	@echo "built deploy/index — commit it with: git add -f deploy/index"
+
+docker:
+	docker build -t philo .
