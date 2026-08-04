@@ -16,14 +16,69 @@ from .util import env_bool, env_float, env_int, env_str, load_dotenv
 
 PROVIDERS = ("mock", "openai", "azure")
 
-# Where we look for the project root: the nearest ancestor holding a library/
-# directory, else the cwd.  Keeps `philo` usable from subdirectories.
+# User-level home for an installed CLI that is not sitting in a checkout.
+USER_HOME = Path(env_str("PHILO_HOME", str(Path.home() / ".philo")))
+
+
+def _has_exact_dir(parent: Path, name: str) -> bool:
+    """`(parent / name).is_dir()` that is not fooled by a case-insensitive FS.
+
+    macOS and Windows match `library` against `/Library`, so a naive upward
+    search for a project root walks all the way to `/`, "finds" the system
+    Library folder and decides the project root is the filesystem root — then
+    tries to write `/.philo`. Comparing against the real directory listing is
+    the only reliable check.
+    """
+    try:
+        if not (parent / name).is_dir():
+            return False
+        return any(entry.name == name for entry in parent.iterdir())
+    except OSError:
+        return False
+
+
+def _is_project_root(path: Path) -> bool:
+    if _has_exact_dir(path, ".philo"):
+        return True
+    # A `library/` alone is not enough — it has to hold actual source texts,
+    # or any directory that merely contains one would capture the search.
+    if _has_exact_dir(path, "library"):
+        library = path / "library"
+        try:
+            return any(
+                entry.suffix.lower() in {".md", ".markdown", ".txt", ".text"}
+                for entry in library.iterdir()
+                if entry.is_file()
+            )
+        except OSError:
+            return False
+    return False
+
+
 def _find_root(start: Path | None = None) -> Path:
+    """Nearest ancestor that is genuinely a philo project, else the cwd.
+
+    The search stops at the home directory and at the filesystem root: a
+    project root above either is never what the user meant, and returning one
+    puts the index somewhere unwritable.
+    """
     cur = (start or Path.cwd()).resolve()
+    home = Path.home().resolve()
     for candidate in [cur, *cur.parents]:
-        if (candidate / "library").is_dir() or (candidate / ".philo").is_dir():
+        if candidate == candidate.parent:      # filesystem root
+            break
+        if _is_project_root(candidate):
             return candidate
+        if candidate == home:
+            break
     return cur
+
+
+def _is_writable(path: Path) -> bool:
+    probe = path if path.is_dir() else path.parent
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    return os.access(probe, os.W_OK)
 
 
 @dataclass
@@ -33,6 +88,9 @@ class Settings:
     library_dir: Path = field(init=False)
     index_dir: Path = field(init=False)
     profiles_dir: Path = field(init=False)
+    # True when running inside a checkout; False when installed, in which
+    # case everything lives under ~/.philo.
+    in_project: bool = field(init=False, default=False)
 
     # ---- provider --------------------------------------------------------
     provider: str = "mock"
@@ -75,9 +133,16 @@ class Settings:
     color: bool = True
 
     def __post_init__(self) -> None:
-        self.library_dir = Path(env_str("PHILO_LIBRARY", str(self.root / "library")))
-        self.index_dir = Path(env_str("PHILO_INDEX", str(self.root / ".philo" / "index")))
-        self.profiles_dir = Path(env_str("PHILO_PROFILES", str(self.root / "profiles")))
+        # Inside a checkout everything lives beside the code. Installed via
+        # pip there is no checkout, so the CLI keeps its texts, index and
+        # profiles under ~/.philo instead of scattering them across whatever
+        # directory the user happened to be standing in.
+        self.in_project = _is_project_root(self.root) and _is_writable(self.root)
+        base = self.root if self.in_project else USER_HOME
+        default_index = base / ".philo" / "index" if self.in_project else base / "index"
+        self.library_dir = Path(env_str("PHILO_LIBRARY", str(base / "library")))
+        self.index_dir = Path(env_str("PHILO_INDEX", str(default_index)))
+        self.profiles_dir = Path(env_str("PHILO_PROFILES", str(base / "profiles")))
 
     # ------------------------------------------------------------------
     @classmethod
