@@ -156,10 +156,16 @@ class MockProvider:
             finish_reason="stop",
         )
 
+    def chat_healthcheck(self) -> str:
+        return f"mock chat ready · {self._chat_model}"
+
+    def embed_healthcheck(self) -> str:
+        vec = self.embed_query("the unexamined life is not worth living")
+        assert abs(sum(x * x for x in vec) - 1.0) < 1e-6
+        return f"mock embed ready · {self._dim}-dim hashed"
+
     def healthcheck(self) -> str:
-        v = self.embed_query("the unexamined life is not worth living")
-        assert abs(sum(x * x for x in v) - 1.0) < 1e-6
-        return f"offline mock provider ready · {self._dim}-dim hashed embeddings"
+        return f"{self.chat_healthcheck()} · {self.embed_healthcheck()}"
 
 
 # --------------------------------------------------------------------------

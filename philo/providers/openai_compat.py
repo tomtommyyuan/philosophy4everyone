@@ -41,7 +41,10 @@ class OpenAIProvider:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.name = settings.provider  # "openai" | "azure"
+        # This class covers both OpenAI and Azure, and may be selected for
+        # chat, embeddings, or both — take the name from whichever role picked
+        # it rather than assuming they agree.
+        self.name = settings.chat_provider if settings.chat_provider in ("openai", "azure") else settings.embed_provider
         self._client: Any = None
         self._dim = _KNOWN_DIMS.get(settings.embed_model, 1536)
         # Learned at runtime from 400 responses; see the class docstring.
@@ -52,11 +55,15 @@ class OpenAIProvider:
     # -- identity ---------------------------------------------------------
     @property
     def chat_model(self) -> str:
-        return self.settings.chat_model_name
+        if self.name == "azure":
+            return self.settings.azure_chat_deployment or self.settings.chat_model
+        return self.settings.chat_model
 
     @property
     def embed_model(self) -> str:
-        return self.settings.embed_model_name
+        if self.name == "azure":
+            return self.settings.azure_embed_deployment or self.settings.embed_model
+        return self.settings.embed_model
 
     @property
     def embed_dim(self) -> int:
@@ -68,7 +75,7 @@ class OpenAIProvider:
         if self._client is not None:
             return self._client
 
-        problems = self.settings.problems()
+        problems = self.settings.problems_for(self.name)
         if problems:
             raise ProviderError(
                 "provider is not configured: " + "; ".join(problems),
@@ -85,7 +92,7 @@ class OpenAIProvider:
 
         s = self.settings
         try:
-            if s.provider == "azure":
+            if self.name == "azure":
                 self._client = openai.AzureOpenAI(
                     api_key=s.azure_api_key,
                     azure_endpoint=s.azure_endpoint,
@@ -105,7 +112,7 @@ class OpenAIProvider:
                     kwargs["organization"] = s.openai_org
                 self._client = openai.OpenAI(**kwargs)
         except Exception as exc:
-            raise ProviderError(f"could not create the {s.provider} client: {exc}", cause=exc) from exc
+            raise ProviderError(f"could not create the {self.name} client: {exc}", cause=exc) from exc
         return self._client
 
     # -- embeddings -------------------------------------------------------
@@ -294,17 +301,20 @@ class OpenAIProvider:
             cause=last,
         )
 
-    def healthcheck(self) -> str:
-        vec = self.embed_query("ping")
+    def chat_healthcheck(self) -> str:
         result = self.chat(
             [{"role": "user", "content": "Reply with the single word: ready"}],
             temperature=0.0,
             max_tokens=16,
         )
-        return (
-            f"{self.name} ok · chat={self.chat_model} ({result.text.strip()[:20] or 'no text'}) "
-            f"· embed={self.embed_model} ({len(vec)}-dim)"
-        )
+        return f"{self.name} chat ok · {self.chat_model} ({result.text.strip()[:20] or 'no text'})"
+
+    def embed_healthcheck(self) -> str:
+        vec = self.embed_query("ping")
+        return f"{self.name} embed ok · {self.embed_model} ({len(vec)}-dim)"
+
+    def healthcheck(self) -> str:
+        return f"{self.chat_healthcheck()} · {self.embed_healthcheck()}"
 
 
 def _usage_dict(usage: Any) -> dict[str, int]:

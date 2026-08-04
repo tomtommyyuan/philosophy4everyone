@@ -1,9 +1,18 @@
 """The provider contract.
 
-Two operations, one interface: turn text into vectors, and turn messages into
-an answer.  Everything above this line (chunking, retrieval, prompting,
-rendering) is provider-agnostic, which is what lets the whole pipeline run
-offline against `MockProvider` and then switch to a real API with one env var.
+Two operations — turn text into vectors, turn messages into an answer — but
+deliberately **two separate protocols**, because they are not always the same
+vendor.
+
+Anthropic has no embeddings endpoint at all: the Messages API is the whole
+surface. So "use Claude" cannot mean "use Claude for everything"; it means
+Claude writes the answers while somebody else builds the index. Modelling that
+as one monolithic Provider would have forced a fake `embed()` that raises at
+the worst possible moment — halfway through ingesting a library.
+
+`CompositeProvider` pairs a chat backend with an embedding backend and
+presents the single `Provider` surface the rest of the codebase already uses,
+so nothing above this layer knows or cares that two vendors are involved.
 """
 
 from __future__ import annotations
@@ -32,6 +41,16 @@ class ChatResult:
     def truncated(self) -> bool:
         return self.finish_reason == "length"
 
+    @property
+    def refused(self) -> bool:
+        """The model declined on safety grounds rather than failing.
+
+        Anthropic and Gemini both return a successful response with a refusal
+        marker instead of raising, so this has to be checked explicitly or a
+        refusal reads as an empty answer.
+        """
+        return self.finish_reason in {"refusal", "safety", "blocked"}
+
 
 class ProviderError(RuntimeError):
     """Anything that went wrong talking to a model.
@@ -46,31 +65,19 @@ class ProviderError(RuntimeError):
         self.cause = cause
 
 
+# --------------------------------------------------------------------------
+# The two halves
+# --------------------------------------------------------------------------
+
+
 @runtime_checkable
-class Provider(Protocol):
+class ChatBackend(Protocol):
+    """Turns messages into an answer."""
+
     name: str
 
     @property
     def chat_model(self) -> str: ...
-
-    @property
-    def embed_model(self) -> str: ...
-
-    @property
-    def embed_dim(self) -> int: ...
-
-    def embed(
-        self,
-        texts: Sequence[str],
-        *,
-        on_progress: ProgressCallback | None = None,
-    ) -> list[list[float]]:
-        """Embed a batch of texts.  Vectors come back L2-normalised."""
-        ...
-
-    def embed_query(self, text: str) -> list[float]:
-        """Embed a single search query (some backends use a distinct prefix)."""
-        ...
 
     def chat(
         self,
@@ -92,6 +99,119 @@ class Provider(Protocol):
         """
         ...
 
-    def healthcheck(self) -> str:
-        """Cheapest possible round-trip.  Returns a human-readable status."""
+    def chat_healthcheck(self) -> str: ...
+
+
+@runtime_checkable
+class EmbeddingBackend(Protocol):
+    """Turns text into vectors."""
+
+    name: str
+
+    @property
+    def embed_model(self) -> str: ...
+
+    @property
+    def embed_dim(self) -> int: ...
+
+    def embed(
+        self,
+        texts: Sequence[str],
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> list[list[float]]:
+        """Embed passages for storage.  Vectors come back L2-normalised."""
         ...
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a search query.
+
+        Separate from `embed` because several providers embed queries and
+        documents asymmetrically — Gemini takes an explicit `task_type`, and
+        using the document mode for a query measurably degrades retrieval.
+        """
+        ...
+
+    def embed_healthcheck(self) -> str: ...
+
+
+@runtime_checkable
+class Provider(ChatBackend, EmbeddingBackend, Protocol):
+    """Both halves — what the rest of the codebase consumes."""
+
+    def healthcheck(self) -> str: ...
+
+
+# --------------------------------------------------------------------------
+# Composition
+# --------------------------------------------------------------------------
+
+
+class CompositeProvider:
+    """One `Provider` made of two backends.
+
+    `name` deliberately reports the **embedding** backend. That field is what
+    the vector store records in its manifest and checks on load, and vector
+    compatibility depends only on who produced the vectors — swapping the chat
+    model must not invalidate an index, while swapping the embedding model
+    must.
+    """
+
+    def __init__(self, chat: ChatBackend, embed: EmbeddingBackend) -> None:
+        self._chat = chat
+        self._embed = embed
+        self.name = embed.name
+
+    # -- identity ---------------------------------------------------------
+    @property
+    def chat_provider(self) -> str:
+        return self._chat.name
+
+    @property
+    def embed_provider(self) -> str:
+        return self._embed.name
+
+    @property
+    def chat_model(self) -> str:
+        return self._chat.chat_model
+
+    @property
+    def embed_model(self) -> str:
+        return self._embed.embed_model
+
+    @property
+    def embed_dim(self) -> int:
+        return self._embed.embed_dim
+
+    @property
+    def split(self) -> bool:
+        """True when chat and embeddings come from different vendors."""
+        return self._chat.name != self._embed.name
+
+    def describe(self) -> str:
+        if not self.split:
+            return self._chat.name
+        return f"{self._chat.name} + {self._embed.name}"
+
+    # -- delegation -------------------------------------------------------
+    def chat(self, messages, **kwargs) -> ChatResult:
+        return self._chat.chat(messages, **kwargs)
+
+    def embed(self, texts, **kwargs) -> list[list[float]]:
+        return self._embed.embed(texts, **kwargs)
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed.embed_query(text)
+
+    def healthcheck(self) -> str:
+        chat = self._chat.chat_healthcheck()
+        if not self.split:
+            embed = self._embed.embed_healthcheck()
+            return f"{chat} · {embed}"
+        return f"{chat} · {self._embed.embed_healthcheck()}"
+
+    def chat_healthcheck(self) -> str:
+        return self._chat.chat_healthcheck()
+
+    def embed_healthcheck(self) -> str:
+        return self._embed.embed_healthcheck()
