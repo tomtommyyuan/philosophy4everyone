@@ -10,16 +10,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Sequence
 
 from rich.console import Console
 from rich.padding import Padding
+from rich.table import Table
 from rich.text import Text
 
 from . import __version__
-from .config import Settings, get_settings
+from .config import USER_HOME, Settings, get_settings
+from .corpus.gutenberg import SOURCES, fetch_all, select
 from .corpus.ingest import ingest, preview_chunks
 from .corpus.loader import CorpusError
 from .generation.answerer import AskOptions, Conversation, Engine
@@ -52,10 +55,12 @@ from .ui import (
     tag_cloud,
 )
 from .ui.components import bullet_list, hint, keyval
+from .ui.theme import TABLE_BOX
 from .util import detect_language, human_ms, snippet
 
 COMMANDS = [
     ("init", "", "create .env, a profile and a first index"),
+    ("fetch", "[--only NAME]", "download the public-domain texts into the library"),
     ("ingest", "[--rebuild]", "read library/, chunk it, embed it, store it"),
     ("ask", '"question"', "answer from the texts, with sources"),
     ("chat", "", "a conversation that remembers the last few turns"),
@@ -63,6 +68,7 @@ COMMANDS = [
     ("search", '"query"', "retrieval only — see what would be sent to the model"),
     ("sources", "", "what is in the library"),
     ("profile", "show|list|set", "who the daily piece is written for"),
+    ("serve", "[--port 8000]", "open the web interface at a local URL"),
     ("doctor", "[--probe]", "check configuration, index and connectivity"),
 ]
 
@@ -91,6 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
     # init
     p_init = sub.add_parser("init", help="first-run setup")
     p_init.add_argument("--force", action="store_true", help="overwrite existing .env / profile")
+
+    # fetch
+    p_fetch = sub.add_parser("fetch", help="download the public-domain texts")
+    p_fetch.add_argument("--only", nargs="*", default=[], help="philosopher or slug substrings")
+    p_fetch.add_argument("--force", action="store_true", help="re-download even if cached")
+    p_fetch.add_argument("--list", action="store_true", dest="list_only", help="list available works")
+    p_fetch.add_argument("--ingest", action="store_true", help="index immediately afterwards")
 
     # ingest
     p_ing = sub.add_parser("ingest", help="build the index")
@@ -157,6 +170,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_prof.add_argument("--avoid", default=None, help="comma separated")
     p_prof.add_argument("--tone", default=None)
 
+    # serve
+    p_serve = sub.add_parser("serve", help="run the web interface")
+    p_serve.add_argument("--host", default="127.0.0.1", help="bind address (default: localhost only)")
+    p_serve.add_argument("--port", type=int, default=8000)
+    p_serve.add_argument("--reload", action="store_true", help="auto-reload on code changes")
+    p_serve.add_argument("--open", action="store_true", dest="open_browser", help="open a browser")
+
     # doctor
     p_doc = sub.add_parser("doctor", help="diagnostics")
     p_doc.add_argument("--probe", action="store_true", help="make a real (tiny) API call")
@@ -189,6 +209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     handlers = {
         "init": cmd_init,
+        "fetch": cmd_fetch,
         "ingest": cmd_ingest,
         "ask": cmd_ask,
         "chat": cmd_chat,
@@ -196,6 +217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "search": cmd_search,
         "sources": cmd_sources,
         "profile": cmd_profile,
+        "serve": cmd_serve,
         "doctor": cmd_doctor,
         "version": lambda a, s, c: (c.print(f"philo {__version__}"), EXIT_OK)[1],
     }
@@ -217,6 +239,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_ERROR
     except FileNotFoundError as exc:
         console.print(error_panel("not found", str(exc)))
+        return EXIT_ERROR
+    except OSError as exc:
+        console.print(
+            error_panel(
+                "filesystem",
+                f"{exc.strerror or exc}: {getattr(exc, 'filename', '') or settings.index_dir}",
+                hint_text=(
+                    "philo writes its index to PHILO_INDEX (currently "
+                    f"{settings.index_dir}). Set PHILO_HOME or PHILO_INDEX to a writable "
+                    "directory, or run from inside a project checkout."
+                ),
+            )
+        )
         return EXIT_ERROR
 
 
@@ -352,6 +387,104 @@ def cmd_init(args: argparse.Namespace, settings: Settings, console: Console) -> 
     console.print()
     console.print(hint('Try:  philo ask "why do we fear death?"'))
     console.print(hint("Then: philo daily"))
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------
+# fetch
+# --------------------------------------------------------------------------
+
+
+def cmd_fetch(args: argparse.Namespace, settings: Settings, console: Console) -> int:
+    if args.list_only:
+        console.print(rule("available works"))
+        console.print()
+        table = Table.grid(padding=(0, 3))
+        table.add_column(style="source.author", no_wrap=True)
+        table.add_column(style="source.work", overflow="ellipsis")
+        table.add_column(style="dim", no_wrap=True)
+        for source in SOURCES:
+            table.add_row(
+                Text(source.philosopher), Text(source.work), Text(f"PG #{source.gid}")
+            )
+        console.print(Padding(table, (0, 2)))
+        console.print()
+        console.print(hint("philo fetch --only kant mill"))
+        return EXIT_OK
+
+    selected = select(args.only)
+    if not selected:
+        console.print(
+            error_panel("fetch", f"No work matches {args.only}.",
+                        hint_text="`philo fetch --list` shows what is available.")
+        )
+        return EXIT_USAGE
+
+    cache_dir = settings.root / ".cache" / "gutenberg" if settings.in_project else USER_HOME / "cache"
+    console.print(
+        status_bar([("into", str(settings.library_dir)), ("works", str(len(selected)))])
+    )
+    console.print()
+
+    progress = make_ingest_progress(console)
+    with progress:
+        task = progress.add_task("downloading", total=len(selected))
+
+        def on_event(stage: str, cur: int, total: int, detail: str) -> None:
+            progress.update(task, completed=cur, description=f"downloading {detail[:40]}")
+
+        report = fetch_all(
+            settings.library_dir, cache_dir,
+            only=args.only, force=args.force, on_event=on_event,
+        )
+
+    table = Table(box=TABLE_BOX, border_style="frame.soft", header_style="muted",
+                  expand=True, show_edge=False, pad_edge=False)
+    table.add_column(L("philosopher"), style="source.author", no_wrap=True,
+                     overflow="ellipsis", max_width=18)
+    table.add_column(L("work"), style="source.work", no_wrap=True,
+                     overflow="ellipsis", max_width=28)
+    table.add_column("chars", justify="right", style="dim", width=9)
+    table.add_column("sections", justify="right", style="muted", width=9)
+    for work in report.works:
+        table.add_row(
+            Text(work.philosopher, style="err" if not work.ok else "source.author"),
+            Text(work.work if work.ok else f"failed: {work.error}"),
+            Text(f"{work.chars:,d}" if work.ok else "—"),
+            Text(str(work.sections) if work.ok else "—"),
+        )
+    console.print(rule("fetched"))
+    console.print()
+    console.print(table)
+    console.print()
+    console.print(
+        status_bar([
+            ("works", f"{report.n_ok}/{len(report.works)}"),
+            ("characters", f"{report.total_chars:,d}"),
+            ("library", str(report.library_dir)),
+        ])
+    )
+
+    warnings = [w for work in report.works for w in work.warnings]
+    if warnings:
+        console.print()
+        console.print(Text("  warnings", style="warn"))
+        console.print(bullet_list(warnings[:8], style="dim"))
+
+    if report.failures:
+        console.print()
+        console.print(
+            Text(f"  ⚠ {len(report.failures)} download(s) failed — re-run to retry", style="warn")
+        )
+        return EXIT_ERROR
+
+    console.print()
+    if args.ingest:
+        return cmd_ingest(
+            argparse.Namespace(library="", rebuild=False, strict=False, dry_run=False, show=0),
+            settings, console,
+        )
+    console.print(hint("next: philo ingest"))
     return EXIT_OK
 
 
@@ -869,6 +1002,66 @@ def cmd_profile(args: argparse.Namespace, settings: Settings, console: Console) 
         )
     console.print()
     console.print(hint("philo profile set --interests 'free will, grief, why work' --language zh"))
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------
+# serve
+# --------------------------------------------------------------------------
+
+
+def cmd_serve(args: argparse.Namespace, settings: Settings, console: Console) -> int:
+    try:
+        import uvicorn  # noqa: F401
+    except ImportError:
+        console.print(
+            error_panel(
+                "serve",
+                "the web extras are not installed",
+                hint_text="pip install 'philo[web]'  (adds fastapi and uvicorn)",
+            )
+        )
+        return EXIT_ERROR
+
+    _header(console, settings)
+
+    url = f"http://{'localhost' if args.host in ('127.0.0.1', '0.0.0.0') else args.host}:{args.port}"
+    console.print(rule("web interface"))
+    console.print()
+    console.print(Padding(Text.assemble(("  ", ""), (url, "brand")), (0, 0, 1, 0)))
+    console.print(_provider_line(settings))
+
+    if args.host not in ("127.0.0.1", "localhost"):
+        # Binding beyond localhost puts your API credits behind a public URL.
+        console.print()
+        if os.environ.get("PHILO_WEB_TOKEN", "").strip():
+            console.print(Text("  ✓ PHILO_WEB_TOKEN is set — requests must present it", style="ok"))
+        else:
+            console.print(
+                Text(
+                    f"  ⚠ binding to {args.host} exposes this beyond your machine, and every\n"
+                    "    request spends your API credits. Set PHILO_WEB_TOKEN to require a token.",
+                    style="warn",
+                )
+            )
+
+    console.print()
+    console.print(hint("ctrl-c to stop"))
+    console.print()
+
+    if args.open_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
+    uvicorn.run(
+        "philo.web.app:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_level="warning",
+    )
     return EXIT_OK
 
 
