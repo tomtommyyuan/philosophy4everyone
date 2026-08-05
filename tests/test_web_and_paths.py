@@ -325,3 +325,21 @@ def test_the_page_wires_the_selector(client):
     assert 'id="f-model"' in page
     assert "/api/models" in page
     assert "chosenModel()" in page
+
+
+def test_a_relative_index_path_does_not_depend_on_the_working_directory(tmp_path, monkeypatch):
+    """Serverless runtimes do not guarantee cwd is the bundle root.
+
+    `vercel.json` ships `PHILO_INDEX=deploy/index`. Resolved against the
+    wrong directory, every request fails with "no index" for a file that is
+    sitting right there in the bundle.
+    """
+    from philo.config import PACKAGE_ROOT, _anchor
+
+    bundled = PACKAGE_ROOT / "deploy" / "index"
+    bundled.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(tmp_path)          # a cwd with no deploy/ at all
+    assert _anchor("deploy/index", tmp_path / "fallback") == bundled.resolve()
+
+    # An absolute path is always honoured verbatim.
+    assert _anchor(str(tmp_path / "custom"), tmp_path) == tmp_path / "custom"

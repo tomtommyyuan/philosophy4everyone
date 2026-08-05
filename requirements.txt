@@ -1,6 +1,12 @@
 # Vercel installs this for the serverless function.
 # Local development uses pyproject.toml — `pip install -e ".[all]"`.
+#
+# All three provider SDKs are included so the model picker offers whichever
+# keys you set in the Vercel dashboard. Measured bundle: ~115 MB against
+# Vercel's 250 MB limit, of which ~35 MB is the committed index.
 rich>=13.0
 fastapi>=0.110
 numpy>=1.24
 openai>=1.30
+anthropic>=0.40
+google-genai>=1.0

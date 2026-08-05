@@ -30,6 +30,31 @@ EMBED_PREFERENCE = ("azure", "openai", "gemini")
 # User-level home for an installed CLI that is not sitting in a checkout.
 USER_HOME = Path(env_str("PHILO_HOME", str(Path.home() / ".philo")))
 
+# The directory containing the `philo` package — the repo root in a checkout,
+# and the bundle root in a serverless deployment.
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _anchor(value: str, default: Path) -> Path:
+    """Resolve a configured path, tolerating a relative one.
+
+    A relative `PHILO_INDEX` is normal in a serverless deployment, where the
+    index ships inside the bundle — but the runtime's working directory is
+    not guaranteed to be the bundle root, and resolving against the wrong one
+    makes every request fail with "no index" for a file that is right there.
+    Try the working directory first, then the package's own location.
+    """
+    if not value:
+        return default
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    from_cwd = (Path.cwd() / path).resolve()
+    if from_cwd.exists():
+        return from_cwd
+    from_package = (PACKAGE_ROOT / path).resolve()
+    return from_package if from_package.exists() else from_cwd
+
 
 def _has_exact_dir(parent: Path, name: str) -> bool:
     """`(parent / name).is_dir()` that is not fooled by a case-insensitive FS.
@@ -172,9 +197,9 @@ class Settings:
         self.in_project = _is_project_root(self.root) and _is_writable(self.root)
         base = self.root if self.in_project else USER_HOME
         default_index = base / ".philo" / "index" if self.in_project else base / "index"
-        self.library_dir = Path(env_str("PHILO_LIBRARY", str(base / "library")))
-        self.index_dir = Path(env_str("PHILO_INDEX", str(default_index)))
-        self.profiles_dir = Path(env_str("PHILO_PROFILES", str(base / "profiles")))
+        self.library_dir = _anchor(env_str("PHILO_LIBRARY"), base / "library")
+        self.index_dir = _anchor(env_str("PHILO_INDEX"), default_index)
+        self.profiles_dir = _anchor(env_str("PHILO_PROFILES"), base / "profiles")
 
     # ------------------------------------------------------------------
     @classmethod
