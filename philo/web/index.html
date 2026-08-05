@@ -99,6 +99,8 @@ select, input.tok {
   border-radius:8px; font:inherit; font-size:12.5px; padding:6px 10px;
 }
 label.toggle { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12.5px; }
+select#f-model { max-width:220px; }
+select#f-model:disabled { opacity:.6; }
 .hintline { color:var(--faint); font-size:12.5px; padding:0 8px 8px; }
 
 /* ---- cards ---- */
@@ -253,6 +255,7 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
         <option value="8">8 passages</option>
         <option value="12">12 passages</option>
       </select>
+      <select id="f-model" title="Which model writes the answer"></select>
       <label class="toggle"><input type="checkbox" id="f-plain"> Plain language only</label>
       <input class="tok hidden" id="f-token" type="password" placeholder="access token" autocomplete="off">
     </div>
@@ -290,7 +293,9 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
 const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 const TOKEN_KEY = "philo.token";
+const MODEL_KEY = "philo.model";
 let HEALTH = null;
+let MODELS = null;
 
 /* ---------------- tiny markdown renderer ----------------
    No CDN is allowed (the page must work offline and inside a strict
@@ -478,18 +483,58 @@ function errorCard(err) {
   return `<div class="notice err"><b>${esc(err.message)}</b>${err.hint ? esc(err.hint) : ""}</div>`;
 }
 
+/* ---------------- model selection ----------------
+   Only the chat model is selectable. Embeddings are fixed by whatever built
+   the index, so offering them here would let a dropdown invalidate the whole
+   library. */
+async function loadModels() {
+  const sel = $("#f-model");
+  try {
+    MODELS = await api("/api/models");
+  } catch {
+    sel.innerHTML = `<option value="">default model</option>`;
+    return;
+  }
+  const cur = MODELS.current || {};
+  const saved = JSON.parse(localStorage.getItem(MODEL_KEY) || "null");
+
+  let html = `<option value="">default · ${esc(cur.model || "")}</option>`;
+  for (const g of MODELS.providers) {
+    const label = g.note ? `${g.provider} — ${g.note}` : g.provider;
+    html += `<optgroup label="${esc(label)}">` + g.models.map(m => {
+      const value = JSON.stringify({ provider: g.provider, model: m });
+      const on = saved && saved.provider === g.provider && saved.model === m;
+      return `<option value='${esc(value)}'${on ? " selected" : ""}>${esc(m)}</option>`;
+    }).join("") + `</optgroup>`;
+  }
+  sel.innerHTML = html;
+  sel.addEventListener("change", () => {
+    if (sel.value) localStorage.setItem(MODEL_KEY, sel.value);
+    else localStorage.removeItem(MODEL_KEY);
+  });
+}
+
+function chosenModel() {
+  const raw = $("#f-model").value;
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch { return {}; }
+}
+
 /* ---------------- ask ---------------- */
 let busy = false;
 async function ask(question) {
   if (busy || !question.trim()) return;
   busy = true;
   $("#asksubmit").disabled = true;
+  const pick = chosenModel();
   const body = JSON.stringify({
     question,
     k: $("#f-k").value ? Number($("#f-k").value) : null,
     philosopher: $("#f-philosopher").value,
     tradition: $("#f-tradition").value,
     plain: $("#f-plain").checked,
+    model: pick.model || "",
+    provider: pick.provider || "",
   });
 
   const share = new URL(location.href);
@@ -558,7 +603,10 @@ async function daily(theme) {
   paint("#daily-out", `<div class="card"><h2>Composing</h2>
       <div class="streaming pulse">…</div></div>`);
   try {
-    const p = await api("/api/daily?" + new URLSearchParams(theme ? { theme } : {}));
+    const pick = chosenModel();
+    const params = new URLSearchParams(theme ? { theme } : {});
+    if (pick.model) { params.set("model", pick.model); params.set("provider", pick.provider); }
+    const p = await api("/api/daily?" + params);
     let html = `<div class="card"><h2>${esc(p.date)} · ${esc(p.theme)}</h2><div class="body serif">
         <h3 class="daily-title">${esc(p.title)}</h3>${markdown(p.hook)}`;
     if (p.quote) html += `<blockquote>${inline(p.quote)}</blockquote>`;
@@ -655,6 +703,8 @@ const EXAMPLES = [
         d.philosophers.map(p => `<option>${esc(p)}</option>`).join("");
       $("#f-tradition").innerHTML = '<option value="">Every tradition</option>' +
         d.traditions.map(t => `<option>${esc(t)}</option>`).join("");
+
+      await loadModels();
 
       const asked = params.get("q");
       if (asked) { q.value = asked; grow(); ask(asked); }

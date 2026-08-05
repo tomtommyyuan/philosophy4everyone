@@ -110,6 +110,10 @@ def require_token(x_philo_token: str | None = Header(default=None)) -> None:
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
+    # Chat only — the embedding model belongs to the index and is not
+    # selectable from a web page.
+    model: str = Field(default="", max_length=120)
+    provider: str = Field(default="", max_length=32)
     k: int | None = Field(default=None, ge=1, le=MAX_K)
     philosopher: str = ""
     work: str = ""
@@ -137,6 +141,8 @@ def _options(req: AskRequest, settings: Settings) -> AskOptions:
         style="plain" if req.plain else "two-layer",
         reader_note=profile.reader_note() if profile else "",
         lang=req.lang or (profile.language if profile else "") or detect_language(req.question),
+        chat_model=req.model.strip(),
+        chat_provider=req.provider.strip(),
     )
 
 
@@ -197,6 +203,32 @@ def create_app() -> FastAPI:
             built_at=engine.store.manifest.built_at,
         )
         return payload
+
+    # ---- models --------------------------------------------------------
+    @app.get("/api/models")
+    def models() -> dict[str, Any]:
+        """Chat models this installation can actually reach.
+
+        Embeddings are absent by design: they are fixed by whatever built the
+        index, and offering them here would let a dropdown invalidate the
+        whole library.
+        """
+        from ..providers.catalog import available
+
+        settings = get_settings()
+        groups = [g.to_dict() for g in available(settings)]
+        allowed = [m.strip() for m in os.environ.get("PHILO_WEB_MODELS", "").split(",") if m.strip()]
+        if allowed:
+            # A public deployment can cap which models visitors may spend on.
+            for group in groups:
+                group["models"] = [m for m in group["models"] if m in allowed]
+            groups = [g for g in groups if g["models"]]
+        return {
+            "providers": groups,
+            "current": {"provider": settings.chat_provider, "model": settings.chat_model_name},
+            "embedding": {"provider": settings.embed_provider, "model": settings.embed_model_name},
+            "restricted": bool(allowed),
+        }
 
     # ---- library -------------------------------------------------------
     @app.get("/api/sources")
@@ -290,6 +322,8 @@ def create_app() -> FastAPI:
         theme: str = "",
         date: str = "",
         k: int = Query(default=5, ge=1, le=MAX_K),
+        model: str = Query(default="", max_length=120),
+        provider: str = Query(default="", max_length=32),
         engine: Engine = Depends(get_engine),
     ) -> dict[str, Any]:
         settings = get_settings()
@@ -299,7 +333,8 @@ def create_app() -> FastAPI:
             # would otherwise let one visitor's page view rewrite the
             # rotation for everybody.
             result = generate_daily(
-                engine, reader, settings, day=date, theme=theme, k=k, save=False
+                engine, reader, settings, day=date, theme=theme, k=k, save=False,
+                chat_model=model.strip(), chat_provider=provider.strip(),
             )
         except ProviderError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc), "hint": exc.hint}) from exc
