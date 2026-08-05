@@ -31,6 +31,10 @@ class AskOptions:
     lang: str = ""                  # "" → detect from the question
     min_score: float | None = None
     temperature: float | None = None
+    # Per-request chat overrides. Only chat can vary: the embedding model is
+    # fixed by whatever built the index, so it is deliberately not here.
+    chat_model: str = ""
+    chat_provider: str = ""
 
 
 class Engine:
@@ -62,6 +66,28 @@ class Engine:
         return self._retriever
 
     # ------------------------------------------------------------------
+    def chat_backend(self, options: AskOptions | None = None):
+        """The backend that should answer this request.
+
+        Retrieval always uses `self.provider` (and therefore the embedding
+        model the index was built with); only generation may be redirected.
+        """
+        opt = options or AskOptions()
+        if not opt.chat_provider or opt.chat_provider == self.settings.chat_provider:
+            return self.provider
+        from ..config import CHAT_PROVIDERS, has_credentials
+        from ..providers import get_backend
+        from ..providers.base import ProviderError
+
+        if opt.chat_provider not in CHAT_PROVIDERS:
+            raise ProviderError(f"unknown chat provider {opt.chat_provider!r}")
+        if not has_credentials(self.settings, opt.chat_provider):
+            raise ProviderError(
+                f"no credentials for chat provider '{opt.chat_provider}'",
+                hint=f"Export its API key, or pick a provider `philo doctor` lists as configured.",
+            )
+        return get_backend(opt.chat_provider, self.settings)
+
     def search(self, query: str, options: AskOptions | None = None) -> RetrievalResult:
         opt = options or AskOptions()
         return self.retriever.search(
@@ -83,6 +109,12 @@ class Engine:
         opt = options or AskOptions()
         lang = opt.lang or detect_language(question)
         started = time.perf_counter()
+
+        # Resolve the backend before retrieving. A bad provider name should
+        # fail immediately, not after the embedding work — and never turn
+        # into a successful-looking "not in this library" when retrieval
+        # happens to come up empty first.
+        backend = self.chat_backend(opt)
 
         result = retrieval or self.retriever.search(
             _retrieval_query(question, history),
@@ -106,12 +138,13 @@ class Engine:
             reader_note=opt.reader_note,
         )
 
-        completion = self.provider.chat(
+        completion = backend.chat(
             messages,
             temperature=self.settings.temperature if opt.temperature is None else opt.temperature,
             max_tokens=self.settings.max_tokens,
             stream_cb=stream_cb,
             task="answer",
+            model=opt.chat_model,
         )
 
         valid = {h.marker for h in result.hits}

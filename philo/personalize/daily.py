@@ -99,6 +99,8 @@ def generate_daily(
     k: int = 5,
     stream_cb=None,
     save: bool = True,
+    chat_model: str = "",
+    chat_provider: str = "",
 ) -> DailyResult:
     started = time.perf_counter()
     day = day or today_str()
@@ -146,12 +148,17 @@ def generate_daily(
         reader_note=profile.reader_note(),
         avoid=profile.recent_titles(),
     )
-    completion = engine.provider.chat(
+    from ..generation.answerer import AskOptions
+
+    completion = engine.chat_backend(
+        AskOptions(chat_provider=chat_provider)
+    ).chat(
         messages,
         temperature=min(0.85, settings.temperature + 0.35),  # a little more life than Q&A
         max_tokens=min(settings.max_tokens, 900),
         stream_cb=stream_cb,
         task="daily",
+        model=chat_model,
     )
 
     valid = {h.marker for h in result.hits}

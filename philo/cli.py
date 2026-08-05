@@ -117,6 +117,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask = sub.add_parser("ask", help="ask a question")
     p_ask.add_argument("question", nargs="+")
     p_ask.add_argument("-k", type=int, default=None, help="how many passages to retrieve")
+    p_ask.add_argument("--model", default="", help="chat model for this run (embeddings are fixed by the index)")
+    p_ask.add_argument("--chat-provider", default="", help="openai | azure | anthropic | gemini")
     p_ask.add_argument("--plain", action="store_true", help="everyday layer only")
     p_ask.add_argument("--show-sources", "-s", action="store_true", help="print the retrieved passages")
     p_ask.add_argument("--profile", default="", help="write for this reader")
@@ -129,6 +131,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_chat = sub.add_parser("chat", help="interactive conversation")
     p_chat.add_argument("--profile", default="")
     p_chat.add_argument("-k", type=int, default=None)
+    p_chat.add_argument("--model", default="", help="chat model for this run (embeddings are fixed by the index)")
+    p_chat.add_argument("--chat-provider", default="", help="openai | azure | anthropic | gemini")
     p_chat.add_argument("--plain", action="store_true")
     add_filters(p_chat)
 
@@ -138,6 +142,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_daily.add_argument("--theme", default="", help="override today's theme")
     p_daily.add_argument("--date", default="", help="generate for a specific date (YYYY-MM-DD)")
     p_daily.add_argument("-k", type=int, default=5)
+    p_daily.add_argument("--model", default="", help="chat model for this run")
+    p_daily.add_argument("--chat-provider", default="", help="openai | azure | anthropic | gemini")
     p_daily.add_argument("--show-sources", "-s", action="store_true")
     p_daily.add_argument("--no-save", action="store_true", help="do not record it in the profile")
     p_daily.add_argument("--no-stream", action="store_true")
@@ -622,6 +628,8 @@ def cmd_ask(args: argparse.Namespace, settings: Settings, console: Console) -> i
         style="plain" if args.plain else "two-layer",
         reader_note=profile.reader_note() if profile else "",
         lang=lang,
+        chat_model=args.model,
+        chat_provider=args.chat_provider,
     )
 
     if not args.json:
@@ -779,6 +787,8 @@ def cmd_chat(args: argparse.Namespace, settings: Settings, console: Console) -> 
             style="plain" if args.plain else "two-layer",
             reader_note=profile.reader_note() if profile else "",
             lang=lang,
+            chat_model=args.model,
+            chat_provider=args.chat_provider,
         )
         console.print()
         answer = _run_ask(
@@ -821,6 +831,8 @@ def cmd_daily(args: argparse.Namespace, settings: Settings, console: Console) ->
             k=args.k,
             stream_cb=cb,
             save=not args.no_save,
+            chat_model=args.model,
+            chat_provider=args.chat_provider,
         )
 
     if stream:
