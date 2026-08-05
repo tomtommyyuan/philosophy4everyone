@@ -2,13 +2,12 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.py": {
-      "memory": 1024,
       "maxDuration": 60,
       "includeFiles": "deploy/index/**"
     }
   },
-  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
   "env": {
     "PHILO_INDEX": "deploy/index"
-  }
+  },
+  "installCommand": "uv pip install --target=. -r requirements.txt"
 }
