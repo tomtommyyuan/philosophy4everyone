@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "provider": "openai",
+  "embed_model": "text-embedding-3-small",
+  "dim": 1536,
+  "n_chunks": 4704,
+  "n_works": 14,
+  "built_at": "2026-08-05T05:51:02+00:00",
+  "library": "/Users/yuansir/projects/philosophy_for_everyone/library",
+  "chunk_settings": {
+    "min": 320,
+    "target": 900,
+    "max": 1500
+  },
+  "works": [
+    {
+      "id": "aristotle-nicomachean-ethics",
+      "philosopher": "Aristotle",
+      "title": "Nicomachean Ethics",
+      "translator": "D. P. Chase",
+      "tradition": "Ancient Greek",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #8438"
+    },
+    {
+      "id": "confucius-the-analects",
+      "philosopher": "Confucius",
+      "title": "The Analects",
+      "translator": "James Legge",
+      "tradition": "Confucianism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #3330"
+    },
+    {
+      "id": "rene-descartes-discourse-on-the-method",
+      "philosopher": "René Descartes",
+      "title": "Discourse on the Method",
+      "translator": "John Veitch",
+      "tradition": "Rationalism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #59"
+    },
+    {
+      "id": "epictetus-discourses-and-the-encheiridion",
+      "philosopher": "Epictetus",
+      "title": "Discourses and the Encheiridion",
+      "translator": "George Long",
+      "tradition": "Stoicism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #10661"
+    },
+    {
+      "id": "david-hume-an-enquiry-concerning-human-understanding",
+      "philosopher": "David Hume",
+      "title": "An Enquiry Concerning Human Understanding",
+      "translator": "",
+      "tradition": "Empiricism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #9662"
+    },
+    {
+      "id": "immanuel-kant-fundamental-principles-of-the-metaphysic-of-mo",
+      "philosopher": "Immanuel Kant",
+      "title": "Fundamental Principles of the Metaphysic of Morals",
+      "translator": "Thomas Kingsmill Abbott",
+      "tradition": "German Idealism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #5682"
+    },
+    {
+      "id": "laozi-tao-te-ching",
+      "philosopher": "Laozi",
+      "title": "Tao Te Ching",
+      "translator": "James Legge",
+      "tradition": "Daoism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #216"
+    },
+    {
+      "id": "marcus-aurelius-meditations",
+      "philosopher": "Marcus Aurelius",
+      "title": "Meditations",
+      "translator": "Meric Casaubon",
+      "tradition": "Stoicism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #2680"
+    },
+    {
+      "id": "john-stuart-mill-on-liberty",
+      "philosopher": "John Stuart Mill",
+      "title": "On Liberty",
+      "translator": "",
+      "tradition": "Liberalism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #34901"
+    },
+    {
+      "id": "john-stuart-mill-utilitarianism",
+      "philosopher": "John Stuart Mill",
+      "title": "Utilitarianism",
+      "translator": "",
+      "tradition": "Utilitarianism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #11224"
+    },
+    {
+      "id": "friedrich-nietzsche-beyond-good-and-evil",
+      "philosopher": "Friedrich Nietzsche",
+      "title": "Beyond Good and Evil",
+      "translator": "Helen Zimmern",
+      "tradition": "Existentialism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #4363"
+    },
+    {
+      "id": "plato-apology",
+      "philosopher": "Plato",
+      "title": "Apology",
+      "translator": "Benjamin Jowett",
+      "tradition": "Ancient Greek",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #1656"
+    },
+    {
+      "id": "bertrand-russell-the-problems-of-philosophy",
+      "philosopher": "Bertrand Russell",
+      "title": "The Problems of Philosophy",
+      "translator": "",
+      "tradition": "Analytic",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #5827"
+    },
+    {
+      "id": "mary-wollstonecraft-a-vindication-of-the-rights-of-woman",
+      "philosopher": "Mary Wollstonecraft",
+      "title": "A Vindication of the Rights of Woman",
+      "translator": "",
+      "tradition": "Enlightenment Feminism",
+      "rights": "public-domain",
+      "source": "Project Gutenberg #3420"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+# What must NOT be uploaded to Vercel.
+#
+# Without this the CLI can upload the 164 MB virtualenv, which is both slow
+# and pointless — Vercel installs from requirements.txt itself.
+.venv/
+venv/
+.cache/
+.philo/
+.git/
+tests/
+scripts/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.env.*
+!.env.example
+Dockerfile
+docker-entrypoint.sh
+.dockerignore
+
+# deploy/index is deliberately NOT ignored: a serverless function has no
+# persistent disk, so the index has to travel inside the deployment.
