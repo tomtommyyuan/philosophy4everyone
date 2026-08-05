@@ -342,9 +342,19 @@ function markdown(src) {
 }
 
 /* ---------------- api ---------------- */
+function currentToken() {
+  // The input is the source of truth, not localStorage. Reading only the
+  // stored copy meant a token typed (or filled by a password manager, which
+  // this `type=password` field invites) was never sent, because `change`
+  // fires on blur and never at all for a programmatic fill.
+  const field = $("#f-token");
+  const typed = field ? field.value.trim() : "";
+  return typed || localStorage.getItem(TOKEN_KEY) || "";
+}
+
 function headers() {
   const h = { "Content-Type": "application/json" };
-  const t = localStorage.getItem(TOKEN_KEY);
+  const t = currentToken();
   if (t) h["X-Philo-Token"] = t;
   return h;
 }
@@ -480,6 +490,13 @@ function paint(where, html) {
   wireCitations(el);
 }
 function errorCard(err) {
+  if (err.status === 401) {
+    const field = $("#f-token");
+    if (field) { field.classList.remove("hidden"); field.focus(); }
+    return `<div class="notice err"><b>This deployment needs an access token.</b>
+      Paste it into the <b>access token</b> field in the row above and ask again —
+      it is remembered in this browser.</div>`;
+  }
   return `<div class="notice err"><b>${esc(err.message)}</b>${err.hint ? esc(err.hint) : ""}</div>`;
 }
 
@@ -547,6 +564,7 @@ async function ask(question) {
   try {
     const res = await fetch("/api/ask/stream", { method: "POST", headers: headers(), body });
     if (!res.ok || !res.body) throw await toError(res);
+    if (res.status === 401) throw await toError(res);
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "", live = "";
@@ -688,7 +706,12 @@ const EXAMPLES = [
 
   const tok = $("#f-token");
   tok.value = localStorage.getItem(TOKEN_KEY) || "";
-  tok.addEventListener("change", () => localStorage.setItem(TOKEN_KEY, tok.value.trim()));
+  // `input` fires on every keystroke, paste and autofill; `change` does not.
+  tok.addEventListener("input", () => {
+    const value = tok.value.trim();
+    if (value) localStorage.setItem(TOKEN_KEY, value);
+    else localStorage.removeItem(TOKEN_KEY);
+  });
 
   const params = new URLSearchParams(location.search);
   if (params.get("tab")) switchTab(params.get("tab"));

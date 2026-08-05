@@ -379,3 +379,18 @@ def test_an_unconfigured_deployment_explains_itself(tmp_path, monkeypatch):
     finally:
         reset_engine()
         monkeypatch.setattr(config_mod, "_settings", None)
+
+
+def test_the_token_is_read_from_the_field_not_only_storage(client):
+    """A token typed into the box must be sent on the very next request.
+
+    Reading only the localStorage copy meant a token filled by a password
+    manager — which a `type=password` field invites — was never sent at all,
+    because `change` does not fire for a programmatic fill.
+    """
+    page = client.get("/").text
+    assert "function currentToken()" in page
+    assert "field.value.trim()" in page
+    # Persisted on `input`, which covers keystrokes, paste and autofill.
+    assert 'tok.addEventListener("input"' in page
+    assert 'tok.addEventListener("change"' not in page
