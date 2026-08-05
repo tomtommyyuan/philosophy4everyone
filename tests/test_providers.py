@@ -399,3 +399,100 @@ def test_a_split_setup_routes_each_call_to_the_right_vendor(make, tmp_path: Path
     assert provider.chat_model == "claude-opus-5"
     assert provider.embed_model == "text-embedding-3-small"
     assert provider.describe() == "anthropic + openai"
+
+
+# --------------------------------------------------------------------------
+# Choosing a chat model per request
+# --------------------------------------------------------------------------
+
+
+def test_only_chat_is_selectable_never_embeddings(make, tmp_path: Path):
+    """A dropdown must not be able to invalidate the index."""
+    from philo.generation.answerer import AskOptions
+
+    assert not hasattr(AskOptions(), "embed_model")
+    assert not hasattr(AskOptions(), "embed_provider")
+    assert AskOptions().chat_model == ""
+    assert AskOptions().chat_provider == ""
+
+
+def test_the_model_override_reaches_the_backend(make, tmp_path: Path):
+    from philo.providers.base import ChatResult, CompositeProvider
+
+    seen: dict = {}
+
+    class Chat:
+        name = "mock"
+        chat_model = "configured-default"
+
+        def chat(self, messages, *, model="", **kw):
+            seen["model"] = model
+            return ChatResult(text="ok", model=model or self.chat_model)
+
+        def chat_healthcheck(self):
+            return "ok"
+
+    class Embed:
+        name = "mock"
+        embed_model = "e"
+        embed_dim = 2
+
+        def embed(self, texts, **kw):
+            return [[1.0, 0.0] for _ in texts]
+
+        def embed_query(self, text):
+            return [1.0, 0.0]
+
+        def embed_healthcheck(self):
+            return "ok"
+
+    provider = CompositeProvider(Chat(), Embed())
+    result = provider.chat([{"role": "user", "content": "hi"}], model="chosen-one")
+    assert seen["model"] == "chosen-one"
+    assert result.model == "chosen-one"
+
+    provider.chat([{"role": "user", "content": "hi"}])
+    assert seen["model"] == ""  # unset falls through to the backend default
+
+
+def test_switching_provider_requires_credentials(make, tmp_path: Path):
+    from philo.generation.answerer import AskOptions, Engine
+    from philo.providers.base import ProviderError
+
+    s = make(tmp_path, PHILO_PROVIDER="mock")
+    engine = Engine(s, get_provider(s))
+
+    # Same provider as configured → the existing composite, no new client.
+    assert engine.chat_backend(AskOptions()) is engine.provider
+
+    with pytest.raises(ProviderError) as unknown:
+        engine.chat_backend(AskOptions(chat_provider="nonsense"))
+    assert "unknown chat provider" in str(unknown.value)
+
+    with pytest.raises(ProviderError) as missing:
+        engine.chat_backend(AskOptions(chat_provider="anthropic"))
+    assert "no credentials" in str(missing.value)
+
+
+def test_catalog_lists_only_reachable_providers(make, tmp_path: Path):
+    from philo.providers.catalog import available, clear_cache
+
+    clear_cache()
+    s = make(tmp_path, PHILO_PROVIDER="mock")
+    names = [g.provider for g in available(s)]
+    assert names == ["mock"]
+    # Anthropic has no key here, so it must not be offered.
+    assert "anthropic" not in names
+
+
+def test_catalog_falls_back_to_a_curated_list(make, tmp_path: Path, monkeypatch):
+    """An unreachable list endpoint should narrow the menu, not empty it."""
+    from philo.providers import catalog
+
+    catalog.clear_cache()
+    s = make(tmp_path, GEMINI_API_KEY="g")
+    monkeypatch.setattr(catalog, "_discover", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
+    group = catalog._for_provider(s, "gemini")
+    assert group.models == catalog.CURATED["gemini"]
+    assert group.discovered is False
+    assert "built-in list" in group.note

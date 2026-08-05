@@ -278,3 +278,50 @@ def test_the_page_uses_the_code_rather_than_a_fixed_command():
     assert "index mismatch" in page
     assert "philo ingest --rebuild" in page
     assert "d.hint" in page
+
+
+# --------------------------------------------------------------------------
+# Model selection from the page
+# --------------------------------------------------------------------------
+
+
+def test_models_endpoint_offers_chat_only(client):
+    d = client.get("/api/models").json()
+    assert d["providers"] and d["providers"][0]["provider"] == "mock"
+    assert d["current"]["model"]
+    # Embeddings are reported for display but never as a choice.
+    assert d["embedding"]["model"]
+    assert all("embed" not in m for g in d["providers"] for m in g["models"])
+
+
+def test_ask_honours_the_selected_model(client):
+    a = client.post(
+        "/api/ask", json={"question": "what is in my control?", "model": "picked-model"}
+    ).json()
+    assert a["model"] == "picked-model"
+    assert a["grounded"] is True
+
+
+def test_an_unknown_provider_is_refused(client):
+    res = client.post(
+        "/api/ask", json={"question": "hi", "provider": "nonsense", "model": "x"}
+    )
+    assert res.status_code == 502
+    assert "unknown chat provider" in res.json()["detail"]["error"]
+
+
+def test_web_models_allowlist_caps_what_visitors_can_spend_on(client, monkeypatch):
+    monkeypatch.setenv("PHILO_WEB_MODELS", "mock-sage-1")
+    d = client.get("/api/models").json()
+    assert d["restricted"] is True
+    assert [m for g in d["providers"] for m in g["models"]] == ["mock-sage-1"]
+
+    monkeypatch.setenv("PHILO_WEB_MODELS", "something-else")
+    assert client.get("/api/models").json()["providers"] == []
+
+
+def test_the_page_wires_the_selector(client):
+    page = client.get("/").text
+    assert 'id="f-model"' in page
+    assert "/api/models" in page
+    assert "chosenModel()" in page
