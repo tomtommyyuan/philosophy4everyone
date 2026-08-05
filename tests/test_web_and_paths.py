@@ -343,3 +343,39 @@ def test_a_relative_index_path_does_not_depend_on_the_working_directory(tmp_path
 
     # An absolute path is always honoured verbatim.
     assert _anchor(str(tmp_path / "custom"), tmp_path) == tmp_path / "custom"
+
+
+def test_an_unconfigured_deployment_explains_itself(tmp_path, monkeypatch):
+    """No key must not become an opaque 500.
+
+    On a hosted deployment the operator often cannot reach the function logs
+    quickly; the single most common misconfiguration has to be visible in the
+    response itself.
+    """
+    import os
+
+    from philo import config as config_mod
+    from philo.web.app import app as fastapi_app, reset_engine
+
+    for name in list(os.environ):
+        if name.startswith(("PHILO_", "OPENAI_", "AZURE_OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_")):
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(config_mod, "_settings", None)
+    reset_engine()
+    try:
+        with TestClient(fastapi_app, raise_server_exceptions=False) as client:
+            health = client.get("/api/health")
+            assert health.status_code == 200
+            body = health.json()
+            assert body["ok"] is False
+            assert "no API key" in body["error"]["error"]
+            assert "export OPENAI_API_KEY" in body["error"]["hint"]
+
+            # The page itself must still render so the message can be shown.
+            assert client.get("/").status_code == 200
+            assert client.get("/api/models").status_code == 200
+            # And answering is refused cleanly, not with a stack trace.
+            assert client.post("/api/ask", json={"question": "hi"}).status_code == 503
+    finally:
+        reset_engine()
+        monkeypatch.setattr(config_mod, "_settings", None)

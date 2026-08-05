@@ -33,7 +33,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import __version__
-from ..config import Settings, get_settings
+from ..config import ConfigError, Settings, get_settings
 from ..generation.answerer import AskOptions, Engine
 from ..personalize.daily import generate_daily
 from ..personalize.profile import DEFAULT_PROFILE_NAME, Profile
@@ -43,6 +43,17 @@ from ..store.vector_store import Filters, IndexError_
 from ..util import detect_language
 
 PAGE = Path(__file__).with_name("index.html")
+
+
+def settings_or_error() -> Settings:
+    """Settings that never raise.
+
+    A deployment missing its API key must still answer /api/health with the
+    reason. Letting ConfigError escape turns the single most common
+    misconfiguration into an opaque 500 whose cause is visible only in
+    function logs — precisely when the operator has least access to them.
+    """
+    return get_settings(strict=False)
 
 MAX_K = 12
 MAX_QUESTION_CHARS = 600
@@ -64,7 +75,17 @@ def get_engine() -> Engine:
         return _engine
     with _lock:
         if _engine is None:
-            settings = get_settings()
+            settings = settings_or_error()
+            if not settings.ready:
+                error = settings.config_error
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": str(error) if error else "no provider configured",
+                        "hint": getattr(error, "hint", "") or "Set an API key for this deployment.",
+                        "code": "unconfigured",
+                    },
+                )
             engine = Engine(settings, get_provider(settings))
             try:
                 engine.store  # forces the index load, and the model-match check
@@ -175,7 +196,7 @@ def create_app() -> FastAPI:
     # ---- health --------------------------------------------------------
     @app.get("/api/health")
     def health() -> dict[str, Any]:
-        settings = get_settings()
+        settings = settings_or_error()
         payload: dict[str, Any] = {
             "version": __version__,
             "provider": settings.chat_provider,
@@ -215,7 +236,9 @@ def create_app() -> FastAPI:
         """
         from ..providers.catalog import available
 
-        settings = get_settings()
+        settings = settings_or_error()
+        if not settings.ready:
+            return {"providers": [], "current": {}, "embedding": {}, "restricted": False}
         groups = [g.to_dict() for g in available(settings)]
         allowed = [m.strip() for m in os.environ.get("PHILO_WEB_MODELS", "").split(",") if m.strip()]
         if allowed:
@@ -265,7 +288,7 @@ def create_app() -> FastAPI:
     # ---- ask -----------------------------------------------------------
     @app.post("/api/ask", dependencies=[Depends(require_token)])
     def ask(req: AskRequest, engine: Engine = Depends(get_engine)) -> dict[str, Any]:
-        settings = get_settings()
+        settings = settings_or_error()
         try:
             answer, _ = engine.ask(req.question, _options(req, settings))
         except ProviderError as exc:
@@ -274,7 +297,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/ask/stream", dependencies=[Depends(require_token)])
     def ask_stream(req: AskRequest, engine: Engine = Depends(get_engine)) -> StreamingResponse:
-        settings = get_settings()
+        settings = settings_or_error()
         options = _options(req, settings)
 
         def events() -> Iterator[str]:
@@ -326,7 +349,7 @@ def create_app() -> FastAPI:
         provider: str = Query(default="", max_length=32),
         engine: Engine = Depends(get_engine),
     ) -> dict[str, Any]:
-        settings = get_settings()
+        settings = settings_or_error()
         reader = Profile.load_or_default(settings.profiles_dir, profile)
         try:
             # Never persist history from a web request: a shared deployment
