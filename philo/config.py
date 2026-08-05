@@ -134,7 +134,7 @@ class Settings:
     chat_provider: str = "mock"
     embed_provider: str = "mock"
 
-    chat_model: str = "gpt-4o"
+    chat_model: str = "gpt-5.5"
     embed_model: str = "text-embedding-3-small"
 
     openai_api_key: str = ""

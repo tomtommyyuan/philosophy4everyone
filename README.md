@@ -461,7 +461,7 @@ Everything is environment variables, read from `.env`. See
 | `PHILO_PROVIDER` | auto | `openai` \| `azure` \| `anthropic` \| `gemini` \| `mock` |
 | `PHILO_CHAT_PROVIDER` | auto | Override just the chat half |
 | `PHILO_EMBED_PROVIDER` | auto | Override just the embedding half |
-| `PHILO_CHAT_MODEL` | `gpt-4o` | OpenAI model name |
+| `PHILO_CHAT_MODEL` | `gpt-5.5` | OpenAI model name |
 | `PHILO_EMBED_MODEL` | `text-embedding-3-small` | OpenAI embedding model |
 | `PHILO_ANTHROPIC_MODEL` | `claude-opus-5` | Claude model |
 | `PHILO_ANTHROPIC_EFFORT` | `medium` | Claude reasoning depth (no `temperature`) |

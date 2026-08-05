@@ -23,7 +23,7 @@ from ..config import CHAT_PROVIDERS, Settings, has_credentials
 # Used when live discovery fails, and to order the discovered list so the
 # models worth reaching for appear first.
 CURATED: dict[str, list[str]] = {
-    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
+    "openai": ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4-mini", "gpt-4o"],
     "anthropic": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
     "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
     "mock": ["mock-sage-1"],
