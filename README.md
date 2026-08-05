@@ -228,11 +228,37 @@ offline and inside a strict content-security policy.
 Questions live in the URL (`/?q=why+do+we+fear+death`), so an answer is
 shareable.
 
+### Choosing a model
+
+The filter row has a model picker, grouped by provider and remembered between
+visits. It lists only providers whose keys are actually configured, discovered
+live from each vendor's own model list (cached, with a curated shortlist when
+that list is unreachable) so it never offers a model your key cannot reach.
+
+**Only the chat model is selectable, deliberately.** Embeddings are fixed by
+whatever built the index; putting them in a dropdown would let one click
+invalidate the whole library. The picker changes who writes the answer — the
+retrieval underneath is identical, which also makes it a fair way to compare
+models on the same evidence.
+
+The CLI takes the same flags:
+
+```bash
+philo ask "why do we fear death?" --model claude-sonnet-5 --chat-provider anthropic
+```
+
+On a public deployment, `PHILO_WEB_MODELS` caps what visitors may spend on:
+
+```bash
+export PHILO_WEB_MODELS="gpt-4o-mini,claude-haiku-4-5"
+```
+
 The API is a plain ASGI app (`philo.web.app:app`) and is documented at
 `/api/docs`:
 
 | Endpoint | |
 |---|---|
+| `GET /api/models` | chat models this installation can reach |
 | `POST /api/ask` | grounded answer as JSON |
 | `POST /api/ask/stream` | the same, as server-sent events |
 | `GET /api/daily` | today's personalised piece |
