@@ -91,19 +91,20 @@ class AnthropicProvider:
         max_tokens: int = 1200,
         stream_cb: StreamCallback | None = None,
         task: str = "answer",
+        model: str = "",
     ) -> ChatResult:
         started = time.perf_counter()
         system, turns = _split_system(messages)
 
         for _ in range(3):
-            kwargs = self._kwargs(system, turns, max_tokens)
+            kwargs = self._kwargs(system, turns, max_tokens, model or self.chat_model)
             try:
                 if stream_cb is not None:
                     text, final = self._stream(kwargs, stream_cb)
                 else:
                     final = self._call(lambda: self.client.messages.create(**kwargs))
                     text = _text_of(final)
-                return self._result(text, final, started)
+                return self._result(text, final, started, kwargs["model"])
             except ProviderError as exc:
                 if not self._adapt(exc):
                     raise
@@ -112,9 +113,9 @@ class AnthropicProvider:
             hint=f"Check that '{self.chat_model}' is a valid Claude model for this key.",
         )
 
-    def _kwargs(self, system: str, turns: list[dict], max_tokens: int) -> dict[str, Any]:
+    def _kwargs(self, system: str, turns: list[dict], max_tokens: int, model: str) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
-            "model": self.chat_model,
+            "model": model,
             # Never send `temperature`: the Claude 5 family rejects sampling
             # parameters outright.
             "max_tokens": max(max_tokens, MIN_MAX_TOKENS),
@@ -148,7 +149,7 @@ class AnthropicProvider:
         final = self._call(run)
         return "".join(parts), final
 
-    def _result(self, text: str, final: Any, started: float) -> ChatResult:
+    def _result(self, text: str, final: Any, started: float, model: str) -> ChatResult:
         stop = getattr(final, "stop_reason", "") or ""
         if stop == "refusal":
             details = getattr(final, "stop_details", None)
@@ -161,7 +162,7 @@ class AnthropicProvider:
         usage = getattr(final, "usage", None)
         return ChatResult(
             text=text.strip(),
-            model=getattr(final, "model", self.chat_model),
+            model=getattr(final, "model", "") or model,
             provider=self.name,
             usage=_usage(usage),
             latency_ms=int((time.perf_counter() - started) * 1000),

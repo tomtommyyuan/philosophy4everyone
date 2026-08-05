@@ -87,10 +87,12 @@ class GeminiProvider:
         max_tokens: int = 1200,
         stream_cb: StreamCallback | None = None,
         task: str = "answer",
+        model: str = "",
     ) -> ChatResult:
         from google.genai import types
 
         started = time.perf_counter()
+        wanted = model or self.chat_model
         system, contents = _to_contents(messages)
 
         config = types.GenerateContentConfig(
@@ -104,7 +106,7 @@ class GeminiProvider:
             final: Any = None
             stream = self._call(
                 lambda: self.client.models.generate_content_stream(
-                    model=self.chat_model, contents=contents, config=config
+                    model=wanted, contents=contents, config=config
                 ),
                 what="generate_content_stream",
             )
@@ -118,7 +120,7 @@ class GeminiProvider:
         else:
             final = self._call(
                 lambda: self.client.models.generate_content(
-                    model=self.chat_model, contents=contents, config=config
+                    model=wanted, contents=contents, config=config
                 ),
                 what="generate_content",
             )
@@ -136,7 +138,7 @@ class GeminiProvider:
 
         return ChatResult(
             text=text.strip(),
-            model=getattr(final, "model_version", "") or self.chat_model,
+            model=getattr(final, "model_version", "") or wanted,
             provider=self.name,
             usage=_usage(getattr(final, "usage_metadata", None)),
             latency_ms=int((time.perf_counter() - started) * 1000),

@@ -87,6 +87,7 @@ class ChatBackend(Protocol):
         max_tokens: int = 1200,
         stream_cb: StreamCallback | None = None,
         task: str = "answer",
+        model: str = "",
     ) -> ChatResult:
         """Generate a completion.
 
@@ -96,6 +97,12 @@ class ChatBackend(Protocol):
 
         `task` is a hint ("answer" | "daily" | "plain") that only the offline
         mock provider consults — real providers ignore it.
+
+        `model` overrides the configured chat model for this call only. It is
+        per-call rather than per-client so switching models costs nothing and
+        reuses the same HTTP connection pool. Only the *chat* model can be
+        varied this way — the embedding model is fixed by whatever built the
+        index.
         """
         ...
 
@@ -196,6 +203,9 @@ class CompositeProvider:
     # -- delegation -------------------------------------------------------
     def chat(self, messages, **kwargs) -> ChatResult:
         return self._chat.chat(messages, **kwargs)
+
+    def chat_backend(self) -> ChatBackend:
+        return self._chat
 
     def embed(self, texts, **kwargs) -> list[list[float]]:
         return self._embed.embed(texts, **kwargs)

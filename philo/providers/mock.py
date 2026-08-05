@@ -123,6 +123,7 @@ class MockProvider:
         max_tokens: int = 1200,
         stream_cb: StreamCallback | None = None,
         task: str = "answer",
+        model: str = "",
     ) -> ChatResult:
         started = time.perf_counter()
         prompt = "\n\n".join(m["content"] for m in messages if m["role"] == "user")
@@ -145,7 +146,7 @@ class MockProvider:
 
         return ChatResult(
             text=text,
-            model=self._chat_model,
+            model=model or self._chat_model,
             provider=self.name,
             usage={
                 "prompt_tokens": len(prompt) // 4,

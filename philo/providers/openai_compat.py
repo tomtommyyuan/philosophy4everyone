@@ -156,15 +156,18 @@ class OpenAIProvider:
         max_tokens: int = 1200,
         stream_cb: StreamCallback | None = None,
         task: str = "answer",
+        model: str = "",
     ) -> ChatResult:
         started = time.perf_counter()
         payload = [dict(m) for m in messages]
+        wanted = model or self.chat_model
 
         # Two adaptation attempts: one to learn `max_completion_tokens`, one
         # to learn that temperature is fixed. Both are sticky for the process.
         last_error: Exception | None = None
         for _ in range(3):
-            kwargs = self._chat_kwargs(payload, temperature, max_tokens, stream=stream_cb is not None)
+            kwargs = self._chat_kwargs(payload, temperature, max_tokens,
+                                       stream=stream_cb is not None, model=wanted)
             try:
                 if stream_cb is not None:
                     text, usage, finish = self._stream(kwargs, stream_cb)
@@ -179,7 +182,7 @@ class OpenAIProvider:
                     usage = _usage_dict(getattr(resp, "usage", None))
                 return ChatResult(
                     text=text.strip(),
-                    model=self.chat_model,
+                    model=wanted,
                     provider=self.name,
                     usage=usage,
                     latency_ms=int((time.perf_counter() - started) * 1000),
@@ -197,9 +200,10 @@ class OpenAIProvider:
         )
 
     def _chat_kwargs(
-        self, messages: list[dict], temperature: float, max_tokens: int, *, stream: bool
+        self, messages: list[dict], temperature: float, max_tokens: int, *,
+        stream: bool, model: str = "",
     ) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {"model": self.chat_model, "messages": messages}
+        kwargs: dict[str, Any] = {"model": model or self.chat_model, "messages": messages}
         if self._use_completion_tokens:
             kwargs["max_completion_tokens"] = max_tokens
         else:
