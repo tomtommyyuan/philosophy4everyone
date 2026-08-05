@@ -222,3 +222,59 @@ def test_token_gate_blocks_and_allows(client, monkeypatch):
 
 def test_no_token_configured_means_open(client):
     assert client.post("/api/ask", json={"question": "what is in my control?"}).status_code == 200
+
+
+# --------------------------------------------------------------------------
+# Index failure reporting
+# --------------------------------------------------------------------------
+
+
+def test_index_errors_are_classified(settings: Settings, provider: MockProvider):
+    """A UI must tell "missing" from "mismatch" without matching on prose."""
+    from philo.store.vector_store import IndexError_, VectorStore
+
+    with pytest.raises(IndexError_) as missing:
+        VectorStore(settings.index_dir / "nowhere").load()
+    assert missing.value.code == "missing"
+
+    ingest(settings, provider)
+    with pytest.raises(IndexError_) as mismatch:
+        VectorStore(settings.index_dir).load(expect_model="text-embedding-3-small")
+    assert mismatch.value.code == "mismatch"
+    # The two need different remedies: a rebuild, not a fetch.
+    assert "--rebuild" in mismatch.value.hint
+    assert "--rebuild" not in missing.value.hint
+
+
+def test_health_reports_the_failure_code_and_hint(settings: Settings, provider: MockProvider, monkeypatch):
+    """The page renders the API's remedy; it must actually be sent one."""
+    from philo import config as config_mod
+    from philo.web.app import app as fastapi_app, reset_engine
+
+    ingest(settings, provider)
+    # Same shape as the real report: index built offline, provider now real.
+    settings.chat_provider = settings.embed_provider = "openai"
+    settings.openai_api_key = "sk-test"
+    monkeypatch.setattr(config_mod, "_settings", settings)
+    reset_engine()
+    try:
+        with TestClient(fastapi_app) as client:
+            payload = client.get("/api/health").json()
+    finally:
+        reset_engine()
+
+    assert payload["ok"] is False
+    error = payload["error"]
+    assert error["code"] == "mismatch"
+    assert "not comparable" in error["error"]
+    assert "philo ingest --rebuild" in error["hint"]
+
+
+def test_the_page_uses_the_code_rather_than_a_fixed_command():
+    """`philo fetch` is the wrong advice after a provider switch."""
+    from philo.web.app import PAGE
+
+    page = PAGE.read_text(encoding="utf-8")
+    assert "index mismatch" in page
+    assert "philo ingest --rebuild" in page
+    assert "d.hint" in page

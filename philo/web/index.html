@@ -362,7 +362,12 @@ async function api(path, opts = {}) {
 function renderStatus(h) {
   const bits = [];
   if (!h.ok) {
-    bits.push(`<span class="chip"><span class="dot bad"></span> no index</span>`);
+    // "no index" is wrong for a model mismatch — the index exists and is
+    // fine, it just belongs to a different embedding model.
+    const code = (h.error && h.error.code) || "error";
+    const label = { missing: "no index", mismatch: "index mismatch",
+                    corrupt: "index corrupt" }[code] || "index unavailable";
+    bits.push(`<span class="chip"><span class="dot bad"></span> ${label}</span>`);
   } else {
     if (h.offline) {
       bits.push(`<span class="chip"><span class="dot off"></span> <b>offline</b> mock provider</span>`);
@@ -385,11 +390,22 @@ function renderStatus(h) {
 function setupNotice(h) {
   if (h.ok) return;
   const d = h.error || {};
+  // The API already knows the precise remedy. Showing a generic
+  // "fetch then ingest" here sent people to the wrong command: after a
+  // provider switch there is nothing to fetch, and plain `ingest` reuses
+  // the cached vectors it is supposed to replace.
+  const title = { missing: "The index is not built yet.",
+                  mismatch: "This index was built by a different embedding model.",
+                  corrupt: "The index is damaged." }[d.code] || "The index is unavailable.";
+  const commands = d.code === "missing"
+    ? ["philo fetch", "philo ingest"]
+    : ["philo ingest --rebuild"];
   $("#ask-out").innerHTML = `<div class="notice warn">
-      <b>The index is not built yet.</b>
+      <b>${esc(title)}</b>
       ${esc(d.error || "No index found.")}
-      <p style="margin:.6em 0 0">Run these where the server is running:</p>
-      <p style="margin:.4em 0 0"><code>philo fetch</code> &nbsp;then&nbsp; <code>philo ingest</code></p>
+      ${d.hint ? `<p style="margin:.6em 0 0">${esc(d.hint)}</p>` : ""}
+      <p style="margin:.6em 0 .25em">Run this where the server is running:</p>
+      <p style="margin:0">${commands.map(c => `<code>${esc(c)}</code>`).join(" &nbsp;then&nbsp; ")}</p>
     </div>`;
 }
 

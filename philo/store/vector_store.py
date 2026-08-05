@@ -33,11 +33,17 @@ SCHEMA_VERSION = 1
 
 
 class IndexError_(RuntimeError):
-    """Index is missing, corrupt, or built by an incompatible model."""
+    """Index is missing, corrupt, or built by an incompatible model.
 
-    def __init__(self, message: str, *, hint: str = ""):
+    `code` exists so a UI can tell those apart without matching on prose.
+    "missing" and "mismatch" need genuinely different advice, and a caller
+    guessing from the message text will eventually guess wrong.
+    """
+
+    def __init__(self, message: str, *, hint: str = "", code: str = "error"):
         super().__init__(message)
         self.hint = hint
+        self.code = code
 
 
 @dataclass
@@ -159,17 +165,23 @@ class VectorStore:
             raise IndexError_(
                 f"no index at {self.path}",
                 hint="Build one with `philo ingest`.",
+                code="missing",
             )
         try:
             self.manifest = Manifest.from_dict(json.loads(self.manifest_path.read_text("utf-8")))
         except (json.JSONDecodeError, OSError) as exc:
-            raise IndexError_(f"index manifest is unreadable: {exc}", hint="Rebuild with `philo ingest --rebuild`.") from exc
+            raise IndexError_(
+                f"index manifest is unreadable: {exc}",
+                hint="Rebuild with `philo ingest --rebuild`.",
+                code="corrupt",
+            ) from exc
 
         if self.manifest.schema != SCHEMA_VERSION:
             raise IndexError_(
                 f"index schema v{self.manifest.schema} was built by a different version of philo "
                 f"(this build expects v{SCHEMA_VERSION})",
                 hint="Rebuild with `philo ingest --rebuild`.",
+                code="mismatch",
             )
 
         # The check that prevents silently-wrong retrieval.
@@ -178,12 +190,14 @@ class VectorStore:
                 f"index was embedded with '{self.manifest.embed_model}' but the current "
                 f"provider uses '{expect_model}' — the vectors are not comparable",
                 hint="Rebuild with `philo ingest --rebuild`, or switch back to the original provider.",
+                code="mismatch",
             )
         if expect_provider and self.manifest.provider and expect_provider != self.manifest.provider:
             raise IndexError_(
                 f"index was built with the '{self.manifest.provider}' provider but you are now "
                 f"using '{expect_provider}'",
                 hint="Rebuild with `philo ingest --rebuild`.",
+                code="mismatch",
             )
 
         self.chunks = []
@@ -198,6 +212,7 @@ class VectorStore:
                     raise IndexError_(
                         f"chunks.jsonl is corrupt at line {line_no}: {exc}",
                         hint="Rebuild with `philo ingest --rebuild`.",
+                        code="corrupt",
                     ) from exc
 
         self.vectors = self._read_vectors()
@@ -206,6 +221,7 @@ class VectorStore:
             raise IndexError_(
                 f"index is inconsistent: {len(self.chunks)} chunks but {n_vecs} vectors",
                 hint="Rebuild with `philo ingest --rebuild`.",
+                code="corrupt",
             )
         self._loaded = True
         return self

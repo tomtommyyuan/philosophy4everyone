@@ -72,7 +72,7 @@ def get_engine() -> Engine:
                 _engine_error = f"{exc} — {exc.hint}"
                 raise HTTPException(
                     status_code=503,
-                    detail={"error": str(exc), "hint": exc.hint},
+                    detail={"error": str(exc), "hint": exc.hint, "code": exc.code},
                 ) from exc
             _engine = engine
     return _engine
