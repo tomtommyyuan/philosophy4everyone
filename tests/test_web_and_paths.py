@@ -412,3 +412,35 @@ def test_ask_accepts_the_mode_flag(client):
     ).json()
     assert sourced["mode"] == "sources" and sourced["sources"]
     assert direct["mode"] == "direct" and direct["sources"] == []
+
+
+def test_the_page_keeps_a_conversation_and_replays_it(client):
+    """Follow-ups need prior turns; the server holds none between requests."""
+    page = client.get("/").text
+    assert 'id="thread"' in page and 'id="f-history"' in page
+    assert "New conversation" in page
+    # The client owns the transcript and sends the tail with each question.
+    assert "history: THREAD.turns" in page
+    assert "philo.threads" in page
+
+
+def test_history_makes_a_bare_follow_up_retrievable(client):
+    """'why?' carries nothing on its own; with context it does."""
+    alone = client.post("/api/ask", json={"question": "why?"}).json()
+    withctx = client.post("/api/ask", json={
+        "question": "why?",
+        "history": [{"question": "what is in my control?",
+                     "answer": "Epictetus distinguishes what is up to us."}],
+    }).json()
+    assert withctx["sources"], "a follow-up should retrieve using earlier context"
+    assert len(withctx["sources"]) > len(alone["sources"])
+
+
+def test_history_is_capped(client):
+    """A client must not be able to push unbounded context into the prompt."""
+    turns = [{"question": f"q{i}", "answer": f"a{i}"} for i in range(60)]
+    over = client.post("/api/ask", json={"question": "hi", "history": turns})
+    assert over.status_code == 422        # rejected by the schema
+    ok = client.post("/api/ask", json={
+        "question": "what is in my control?", "history": turns[:10]})
+    assert ok.status_code == 200          # trimmed to the last few turns

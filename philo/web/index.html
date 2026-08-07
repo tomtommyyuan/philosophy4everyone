@@ -121,6 +121,28 @@ select#f-model { max-width:220px; }
 select#f-model:disabled { opacity:.6; }
 .hintline { color:var(--faint); font-size:12.5px; padding:0 8px 8px; }
 
+/* ---- conversation ---- */
+.threadbar { display:flex; gap:8px; align-items:center; margin-bottom:14px; }
+.threadbar select { flex:1; max-width:420px; }
+button.ghost {
+  appearance:none; background:var(--panel); border:1px solid var(--line); border-radius:8px;
+  color:var(--muted); font:inherit; font-size:12.5px; padding:6px 12px; cursor:pointer;
+}
+button.ghost:hover { color:var(--ink); border-color:var(--violet); }
+button.ghost.danger:hover { color:var(--err); border-color:var(--err); }
+/* The composer follows you down a long thread instead of scrolling away. */
+#tab-ask .askbox { position:sticky; bottom:14px; z-index:5; }
+.turn { margin-bottom:26px; }
+.turn + .turn { border-top:1px solid var(--line-soft); padding-top:22px; }
+.ask-q {
+  font-family:var(--serif); font-size:19px; line-height:1.45; color:var(--ink);
+  display:flex; gap:11px; align-items:baseline; margin-bottom:4px;
+}
+.ask-q::before {
+  content:"›"; color:var(--violet); font-weight:700; font-size:17px; flex:none;
+}
+.followup { color:var(--faint); font-size:12px; margin:2px 0 0 22px; }
+
 /* ---- cards ---- */
 .card {
   background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
@@ -259,6 +281,14 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
 
 <!-- ============================ ASK ============================ -->
 <section id="tab-ask">
+  <div class="threadbar">
+    <select id="f-history" title="Earlier conversations"></select>
+    <button type="button" id="f-new" class="ghost">New conversation</button>
+    <button type="button" id="f-clear" class="ghost danger">Delete</button>
+  </div>
+
+  <div id="thread"></div>
+
   <form class="askbox" id="askform">
     <div class="askrow">
       <textarea id="q" rows="1" placeholder="Why should I not fear death?" autocomplete="off"></textarea>
@@ -287,7 +317,6 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
   </form>
 
   <div class="examples" id="examples"></div>
-  <div id="ask-out"></div>
 </section>
 
 <!-- ============================ DAILY ============================ -->
@@ -319,6 +348,10 @@ const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 const TOKEN_KEY = "philo.token";
 const MODEL_KEY = "philo.model";
 const MODE_KEY = "philo.grounded";
+const THREADS_KEY = "philo.threads";
+const MAX_THREADS = 12;
+let THREADS = [];
+let THREAD = null;
 let HEALTH = null;
 let MODELS = null;
 
@@ -440,7 +473,7 @@ function setupNotice(h) {
   const commands = d.code === "missing"
     ? ["philo fetch", "philo ingest"]
     : ["philo ingest --rebuild"];
-  $("#ask-out").innerHTML = `<div class="notice warn">
+  $("#thread").innerHTML = `<div class="notice warn">
       <b>${esc(title)}</b>
       ${esc(d.error || "No index found.")}
       ${d.hint ? `<p style="margin:.6em 0 0">${esc(d.hint)}</p>` : ""}
@@ -528,6 +561,13 @@ function paint(where, html) {
   el.innerHTML = html;
   wireCitations(el);
 }
+
+function paintSlot(i, html) {
+  const el = slotFor(i);
+  if (!el) return;
+  el.innerHTML = html;
+  wireCitations(el);
+}
 function errorCard(err) {
   if (err.status === 401) {
     const field = $("#f-token");
@@ -538,6 +578,56 @@ function errorCard(err) {
   }
   return `<div class="notice err"><b>${esc(err.message)}</b>${err.hint ? esc(err.hint) : ""}</div>`;
 }
+
+/* ---------------- conversation state ----------------
+   The server keeps nothing between requests — required on serverless, where
+   consecutive requests need not reach the same instance — so the browser owns
+   the transcript and replays its tail with each question. */
+function newThread() {
+  THREAD = { id: String(Date.now()), title: "", turns: [] };
+  THREADS.unshift(THREAD);
+  THREADS = THREADS.slice(0, MAX_THREADS);
+  saveThreads();
+  renderThread();
+  renderHistory();
+}
+
+function loadThreads() {
+  try { THREADS = JSON.parse(localStorage.getItem(THREADS_KEY) || "[]"); }
+  catch { THREADS = []; }
+  if (!Array.isArray(THREADS) || !THREADS.length) { THREADS = []; newThread(); }
+  else THREAD = THREADS[0];
+}
+
+function saveThreads() {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try { localStorage.setItem(THREADS_KEY, JSON.stringify(THREADS)); return; }
+    catch { THREADS = THREADS.slice(0, Math.max(1, THREADS.length - 3)); }
+  }
+}
+
+function renderHistory() {
+  const sel = $("#f-history");
+  sel.innerHTML = THREADS.map(t => {
+    const label = t.title ? `${t.title.slice(0, 60)} · ${t.turns.length}` : "New conversation";
+    return `<option value="${esc(t.id)}"${t === THREAD ? " selected" : ""}>${esc(label)}</option>`;
+  }).join("");
+}
+
+/* ---------------- rendering a thread ---------------- */
+function renderThread() {
+  const box = $("#thread");
+  box.innerHTML = THREAD.turns.map((turn, i) => `
+    <div class="turn" data-turn="${i}">
+      <div class="ask-q">${esc(turn.q)}</div>
+      ${i > 0 ? '<div class="followup">follow-up — earlier turns are sent as context</div>' : ""}
+      <div class="slot">${turn.a ? renderAnswer(turn.a) : ""}</div>
+    </div>`).join("");
+  wireCitations(box);
+  $("#examples").classList.toggle("hidden", THREAD.turns.length > 0);
+}
+
+function slotFor(i) { return $(`.turn[data-turn="${i}"] .slot`); }
 
 /* ---------------- model selection ----------------
    Only the chat model is selectable. Embeddings are fixed by whatever built
@@ -596,14 +686,26 @@ async function ask(question) {
     model: pick.model || "",
     provider: pick.provider || "",
     grounded: grounded(),
+    // Replay the tail of this conversation so follow-ups resolve. A bare
+    // "why?" is unretrievable on its own; with the prior turn it is not.
+    history: THREAD.turns.slice(0, -1).filter(t => t.a).slice(-4)
+      .map(t => ({ question: t.q, answer: t.a.plain || "" })),
   });
 
   const share = new URL(location.href);
   share.searchParams.set("q", question);
   history.replaceState(null, "", share);
 
-  paint("#ask-out", `<div class="card"><h2>Reading the sources</h2>
-      <div class="streaming pulse" id="live"></div></div>`);
+  const turn = { q: question.trim(), a: null };
+  THREAD.turns.push(turn);
+  if (!THREAD.title) { THREAD.title = turn.q; renderHistory(); }
+  const index = THREAD.turns.length - 1;
+  renderThread();
+
+  const heading = grounded() ? "Reading the sources" : "Answering without sources";
+  slotFor(index).innerHTML = `<div class="card"><h2>${heading}</h2>
+      <div class="streaming pulse" id="live"></div></div>`;
+  slotFor(index).scrollIntoView({ behavior: "smooth", block: "nearest" });
 
   try {
     const res = await fetch("/api/ask/stream", { method: "POST", headers: headers(), body });
@@ -633,9 +735,9 @@ async function ask(question) {
             box.scrollTop = box.scrollHeight;
           }
         } else if (ev[1] === "done") {
-          paint("#ask-out", renderAnswer(payload));
+          turn.a = payload; saveThreads(); renderThread();
         } else if (ev[1] === "error") {
-          paint("#ask-out", errorCard(Object.assign(new Error(payload.error), { hint: payload.hint })));
+          paintSlot(index, errorCard(Object.assign(new Error(payload.error), { hint: payload.hint })));
         }
       }
     }
@@ -643,9 +745,9 @@ async function ask(question) {
     // Some proxies buffer or refuse streaming; the plain endpoint always works.
     try {
       const answer = await api("/api/ask", { method: "POST", body });
-      paint("#ask-out", renderAnswer(answer));
+      turn.a = answer; saveThreads(); renderThread();
     } catch (err2) {
-      paint("#ask-out", errorCard(err2));
+      paintSlot(index, errorCard(err2));
     }
   } finally {
     busy = false;
@@ -747,6 +849,19 @@ const EXAMPLES = [
   });
   $("#askform").addEventListener("submit", e => { e.preventDefault(); ask(q.value); });
   $("#dailyform").addEventListener("submit", e => { e.preventDefault(); daily($("#theme").value.trim()); });
+
+  loadThreads();
+  renderThread();
+  renderHistory();
+  $("#f-new").addEventListener("click", () => { newThread(); $("#q").focus(); });
+  $("#f-history").addEventListener("change", e => {
+    const found = THREADS.find(t => t.id === e.target.value);
+    if (found) { THREAD = found; renderThread(); }
+  });
+  $("#f-clear").addEventListener("click", () => {
+    THREADS = THREADS.filter(t => t !== THREAD);
+    if (!THREADS.length) { newThread(); } else { THREAD = THREADS[0]; saveThreads(); renderThread(); renderHistory(); }
+  });
 
   const modeButtons = $$("#f-mode button");
   const savedMode = localStorage.getItem(MODE_KEY);

@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..config import ConfigError, Settings, get_settings
-from ..generation.answerer import AskOptions, Engine
+from ..generation.answerer import AskOptions, Conversation, Engine
 from ..personalize.daily import generate_daily
 from ..personalize.profile import DEFAULT_PROFILE_NAME, Profile
 from ..providers import get_provider
@@ -129,6 +129,16 @@ def require_token(x_philo_token: str | None = Header(default=None)) -> None:
 # --------------------------------------------------------------------------
 
 
+MAX_HISTORY_TURNS = 4
+
+
+class Turn(BaseModel):
+    """One earlier exchange, replayed by the client."""
+
+    question: str = Field(default="", max_length=MAX_QUESTION_CHARS)
+    answer: str = Field(default="", max_length=4000)
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
     # Chat only — the embedding model belongs to the index and is not
@@ -144,6 +154,9 @@ class AskRequest(BaseModel):
     profile: str = ""
     # False = ask the model directly, no retrieval, no sources.
     grounded: bool = True
+    # Prior turns, oldest first. Only the tail is used; the cap bounds both
+    # the prompt size and what a client can push into the context.
+    history: list[Turn] = Field(default_factory=list, max_length=40)
 
 
 def _filters(req: AskRequest) -> Filters:
@@ -152,6 +165,11 @@ def _filters(req: AskRequest) -> Filters:
         work=req.work.strip(),
         tradition=req.tradition.strip(),
     )
+
+
+def _history(req: AskRequest) -> list:
+    pairs = [(t.question, t.answer) for t in req.history if t.question and t.answer]
+    return Conversation.from_pairs(pairs, max_turns=MAX_HISTORY_TURNS).as_messages()
 
 
 def _options(req: AskRequest, settings: Settings) -> AskOptions:
@@ -293,7 +311,9 @@ def create_app() -> FastAPI:
     def ask(req: AskRequest, engine: Engine = Depends(get_engine)) -> dict[str, Any]:
         settings = settings_or_error()
         try:
-            answer, _ = engine.ask(req.question, _options(req, settings))
+            answer, _ = engine.ask(
+                req.question, _options(req, settings), history=_history(req)
+            )
         except ProviderError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc), "hint": exc.hint}) from exc
         return answer.to_dict()
@@ -302,6 +322,7 @@ def create_app() -> FastAPI:
     def ask_stream(req: AskRequest, engine: Engine = Depends(get_engine)) -> StreamingResponse:
         settings = settings_or_error()
         options = _options(req, settings)
+        history = _history(req)
 
         def events() -> Iterator[str]:
             # The provider pushes deltas through a callback while this
@@ -312,7 +333,8 @@ def create_app() -> FastAPI:
             def run() -> None:
                 try:
                     answer, _ = engine.ask(
-                        req.question, options, stream_cb=lambda d: channel.put(("delta", d))
+                        req.question, options, history=history,
+                        stream_cb=lambda d: channel.put(("delta", d)),
                     )
                     channel.put(("done", answer.to_dict()))
                 except ProviderError as exc:

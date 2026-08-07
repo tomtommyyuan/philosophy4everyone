@@ -311,6 +311,18 @@ class Conversation:
         self.turns.append((question, answer.plain))
         self.turns = self.turns[-self.max_turns:]
 
+    @classmethod
+    def from_pairs(cls, pairs: Sequence[tuple[str, str]], max_turns: int = 4) -> "Conversation":
+        """Rebuild history a stateless client sent back.
+
+        The server keeps nothing between requests — necessary on serverless,
+        where consecutive requests may not even hit the same instance — so the
+        browser owns the transcript and replays the tail of it each time.
+        """
+        conversation = cls(max_turns=max_turns)
+        conversation.turns = [(q, a) for q, a in pairs][-max_turns:]
+        return conversation
+
     def as_messages(self) -> list[Message]:
         out: list[Message] = []
         for q, a in self.turns:

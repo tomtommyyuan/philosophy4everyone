@@ -228,6 +228,21 @@ offline and inside a strict content-security policy.
 Questions live in the URL (`/?q=why+do+we+fear+death`), so an answer is
 shareable.
 
+### Conversations and follow-ups
+
+Answers accumulate into a thread, so you can ask *"why?"* or *"what would
+Kant say to that?"* and be understood. Earlier turns are replayed as context,
+which matters for retrieval as much as for tone: a bare "why?" carries nothing
+searchable on its own, so the retriever expands it with the previous question
+before embedding it.
+
+The server stores nothing between requests — required on serverless, where two
+consecutive requests need not reach the same instance — so the browser owns the
+transcript and sends the tail of it with each question. Conversations persist
+across reloads and are listed in the dropdown above the thread; the history cap
+is enforced server-side so a client cannot push unbounded context into a prompt
+you are paying for.
+
 ### Sourced or unsourced
 
 A two-state control next to the model picker:
