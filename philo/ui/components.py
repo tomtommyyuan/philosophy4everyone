@@ -260,7 +260,31 @@ def answer_view(
     show_sources: bool = False,
     show_academic: bool = True,
 ) -> RenderableType:
-    parts: list[RenderableType] = [answer_panels(answer, lang=lang, show_academic=show_academic)]
+    parts: list[RenderableType] = []
+
+    if answer.mode == "direct":
+        # An unsourced answer must never be able to pass for a sourced one.
+        parts.append(
+            Panel(
+                Padding(
+                    Text(
+                        "Answered from the model's own recollection — no passages were "
+                        "retrieved, and nothing here is checkable against a text.",
+                        style="warn",
+                    ),
+                    (0, 1),
+                ),
+                border_style="warn",
+                box=PANEL_BOX,
+                padding=0,
+            )
+        )
+        parts.append(Text(""))
+
+    parts.append(answer_panels(answer, lang=lang, show_academic=show_academic))
+
+    if answer.mode == "direct":
+        return Group(*parts)
 
     if answer.sources:
         parts.append(Text(""))

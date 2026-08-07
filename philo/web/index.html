@@ -100,6 +100,24 @@ select, input.tok {
 }
 label.toggle { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12.5px; }
 select#f-model { max-width:220px; }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.seg button {
+  appearance:none; background:var(--bg); border:0; cursor:pointer; color:var(--muted);
+  font:inherit; font-size:12.5px; padding:6px 11px;
+}
+.seg button + button { border-left:1px solid var(--line); }
+.seg button:hover { color:var(--ink); }
+.seg button.on { background:var(--violet); color:#fff; font-weight:600; }
+.seg button.on[data-grounded="0"] { background:var(--warn); }
+/* An unsourced answer must never inherit the visual authority of a sourced
+   one — different frame, and a banner that says so before the prose. */
+.ungrounded { border-color:var(--warn) !important; }
+.ungrounded > h2 { color:var(--warn) !important; }
+.warnbar {
+  border:1px solid var(--warn); border-radius:12px; padding:11px 16px; margin-top:18px;
+  background:color-mix(in srgb, var(--warn) 8%, transparent); font-size:14px;
+}
+.warnbar b { display:block; margin-bottom:2px; }
 select#f-model:disabled { opacity:.6; }
 .hintline { color:var(--faint); font-size:12.5px; padding:0 8px 8px; }
 
@@ -255,6 +273,12 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
         <option value="8">8 passages</option>
         <option value="12">12 passages</option>
       </select>
+      <span class="seg" id="f-mode" role="group" aria-label="Answer mode">
+        <button type="button" data-grounded="1" class="on"
+                title="Retrieve real passages first; every claim carries a citation">From sources</button>
+        <button type="button" data-grounded="0"
+                title="Ask the model directly, with no retrieval and no citations">No sources</button>
+      </span>
       <select id="f-model" title="Which model writes the answer"></select>
       <label class="toggle"><input type="checkbox" id="f-plain"> Plain language only</label>
       <input class="tok hidden" id="f-token" type="password" placeholder="access token" autocomplete="off">
@@ -294,6 +318,7 @@ const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 const TOKEN_KEY = "philo.token";
 const MODEL_KEY = "philo.model";
+const MODE_KEY = "philo.grounded";
 let HEALTH = null;
 let MODELS = null;
 
@@ -451,6 +476,20 @@ function sourceList(sources) {
 }
 
 function renderAnswer(a) {
+  if (a.mode === "direct") {
+    let html = `<div class="warnbar"><b>No sources — the model's own recollection.</b>
+      Nothing below was retrieved from a text, so none of it is checkable.
+      Switch to <b>From sources</b> to see the same question answered only from
+      the indexed works, with citations.</div>
+      <div class="card ungrounded"><h2>In plain words</h2>
+        <div class="body serif">${markdown(a.plain)}</div></div>`;
+    if (a.academic && a.academic.trim()) {
+      html += `<div class="card ungrounded"><h2>The argument</h2>
+        <div class="body">${markdown(a.academic)}</div></div>`;
+    }
+    html += `<div class="foot">via ${esc(a.provider)}  ·  ${esc(a.model)}  ·  no retrieval  ·  ${a.latency_ms} ms</div>`;
+    return html;
+  }
   if (!a.grounded) {
     return `<div class="notice warn"><b>Not in this library.</b>
       ${markdown(a.plain)}</div>` + sourceList(a.sources);
@@ -531,6 +570,10 @@ async function loadModels() {
   });
 }
 
+function grounded() {
+  return $('#f-mode button.on').dataset.grounded === "1";
+}
+
 function chosenModel() {
   const raw = $("#f-model").value;
   if (!raw) return {};
@@ -552,6 +595,7 @@ async function ask(question) {
     plain: $("#f-plain").checked,
     model: pick.model || "",
     provider: pick.provider || "",
+    grounded: grounded(),
   });
 
   const share = new URL(location.href);
@@ -703,6 +747,16 @@ const EXAMPLES = [
   });
   $("#askform").addEventListener("submit", e => { e.preventDefault(); ask(q.value); });
   $("#dailyform").addEventListener("submit", e => { e.preventDefault(); daily($("#theme").value.trim()); });
+
+  const modeButtons = $$("#f-mode button");
+  const savedMode = localStorage.getItem(MODE_KEY);
+  if (savedMode !== null) {
+    modeButtons.forEach(b => b.classList.toggle("on", b.dataset.grounded === savedMode));
+  }
+  modeButtons.forEach(b => b.addEventListener("click", () => {
+    modeButtons.forEach(x => x.classList.toggle("on", x === b));
+    localStorage.setItem(MODE_KEY, b.dataset.grounded);
+  }));
 
   const tok = $("#f-token");
   tok.value = localStorage.getItem(TOKEN_KEY) || "";

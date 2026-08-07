@@ -120,6 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument("--model", default="", help="chat model for this run (embeddings are fixed by the index)")
     p_ask.add_argument("--chat-provider", default="", help="openai | azure | anthropic | gemini")
     p_ask.add_argument("--plain", action="store_true", help="everyday layer only")
+    p_ask.add_argument("--no-sources", action="store_true", dest="ungrounded",
+                       help="ask the model directly, with no retrieval (answers carry no citations)")
     p_ask.add_argument("--show-sources", "-s", action="store_true", help="print the retrieved passages")
     p_ask.add_argument("--profile", default="", help="write for this reader")
     p_ask.add_argument("--lang", default="", choices=["", "en", "zh"])
@@ -630,6 +632,7 @@ def cmd_ask(args: argparse.Namespace, settings: Settings, console: Console) -> i
         lang=lang,
         chat_model=args.model,
         chat_provider=args.chat_provider,
+        grounded=not args.ungrounded,
     )
 
     if not args.json:

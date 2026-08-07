@@ -200,3 +200,55 @@ def test_conversation_keeps_only_recent_turns(engine: Engine):
         conversation.add(f"question {i}", answer)
     assert len(conversation.turns) == 2
     assert conversation.last_question() == "question 4"
+
+
+# --------------------------------------------------------------------------
+# Unsourced mode
+# --------------------------------------------------------------------------
+
+
+def test_direct_mode_skips_retrieval_entirely(engine: Engine, monkeypatch):
+    """No embedding call, no store read — it is a plain model call."""
+    def explode(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("retrieval ran in unsourced mode")
+
+    monkeypatch.setattr(engine.retriever, "search", explode)
+    answer, result = engine.ask("what is virtue?", AskOptions(grounded=False))
+    assert answer.mode == "direct"
+    assert answer.sources == []
+    assert result.hits == []
+
+
+def test_direct_mode_is_distinguishable_from_a_failed_search(engine: Engine):
+    """Both have no sources; they must not look the same to a caller.
+
+    A refusal means "the library has nothing"; a direct answer means "we did
+    not look". Presenting them identically would be the whole point missed.
+    """
+    refusal, _ = engine.ask("lattice gauge renormalisation", AskOptions(min_score=0.99))
+    direct, _ = engine.ask("lattice gauge renormalisation", AskOptions(grounded=False))
+
+    assert refusal.mode == "sources" and refusal.grounded is False
+    assert direct.mode == "direct" and direct.grounded is False
+    assert refusal.mode != direct.mode
+
+
+def test_the_direct_prompt_carries_no_sources_and_forbids_citation():
+    from philo.generation.prompts import build_direct_messages
+
+    messages = build_direct_messages("what is virtue?", lang="en")
+    system_prompt = messages[0]["content"]
+    assert "SOURCES" not in messages[-1]["content"]
+    # A remembered citation that looks precise is the exact failure the
+    # sourced mode exists to prevent.
+    assert "do not cite a chapter" in system_prompt
+    assert "Do not present anything as a quotation" in system_prompt
+
+
+def test_any_citation_marker_in_direct_mode_is_stripped(engine: Engine):
+    """With no sources, every [n] is invented by definition."""
+    from philo.generation.prompts import audit_markers
+
+    cleaned, invented = audit_markers("As Kant writes [1], duty is prior [2].", set())
+    assert invented == {1, 2}
+    assert "[1]" not in cleaned and "[2]" not in cleaned

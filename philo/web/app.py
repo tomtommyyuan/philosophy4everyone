@@ -142,6 +142,8 @@ class AskRequest(BaseModel):
     plain: bool = False
     lang: str = ""
     profile: str = ""
+    # False = ask the model directly, no retrieval, no sources.
+    grounded: bool = True
 
 
 def _filters(req: AskRequest) -> Filters:
@@ -164,6 +166,7 @@ def _options(req: AskRequest, settings: Settings) -> AskOptions:
         lang=req.lang or (profile.language if profile else "") or detect_language(req.question),
         chat_model=req.model.strip(),
         chat_provider=req.provider.strip(),
+        grounded=req.grounded,
     )
 
 

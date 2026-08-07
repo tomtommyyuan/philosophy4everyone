@@ -131,7 +131,9 @@ class MockProvider:
         question = _parse_question(prompt)
         lang = detect_language(question or prompt)
 
-        if task == "daily":
+        if task == "direct":
+            text = _compose_direct(question, lang)
+        elif task == "daily":
             text = _compose_daily(question, sources, lang)
         elif not sources:
             text = _compose_refusal(question, lang)
@@ -300,6 +302,34 @@ def _compose_answer(question: str, sources: list[_Source], lang: str) -> str:
     head_plain = "## IN PLAIN WORDS"
     head_acad = "## THE ARGUMENT"
     return f"{head_plain}\n" + "\n".join(plain_lines) + f"\n\n{head_acad}\n" + "\n".join(academic_lines)
+
+
+def _compose_direct(question: str, lang: str) -> str:
+    """The offline provider has no knowledge to recall.
+
+    Unsourced mode asks the model to answer from memory. A hashed-embedding
+    mock has no memory, and pretending otherwise would misrepresent what the
+    comparison shows.
+    """
+    if lang == "zh":
+        return (
+            "## IN PLAIN WORDS\n"
+            f"「{question}」——离线模拟没有可供回忆的知识，所以这里没有答案。\n\n"
+            "## THE ARGUMENT\n"
+            "无出处模式要求模型凭自身知识作答；mock provider 只会检索与摘录，"
+            "本身不具备任何哲学知识。配置真实 API key 后，这个模式才有意义——"
+            "也才能和有出处的模式做对照。"
+        )
+    return (
+        "## IN PLAIN WORDS\n"
+        f"There is no answer here for “{question}”. The offline mock has no "
+        "knowledge to recall.\n\n"
+        "## THE ARGUMENT\n"
+        "Unsourced mode asks the model to answer from its own memory. The mock "
+        "provider only selects and quotes retrieved text — it holds no philosophy "
+        "of its own, so there is nothing for it to recall. Point this at a real "
+        "model and the comparison between the two modes becomes meaningful."
+    )
 
 
 def _compose_refusal(question: str, lang: str) -> str:

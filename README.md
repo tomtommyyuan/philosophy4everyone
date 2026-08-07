@@ -228,6 +228,31 @@ offline and inside a strict content-security policy.
 Questions live in the URL (`/?q=why+do+we+fear+death`), so an answer is
 shareable.
 
+### Sourced or unsourced
+
+A two-state control next to the model picker:
+
+| | |
+|---|---|
+| **From sources** (default) | Retrieve first, answer only from the passages, cite every claim. Refuses when the library has nothing. |
+| **No sources** | A plain model call. No retrieval, no citations, no refusal — the model answers from its own recollection. |
+
+This exists to make the difference *visible*. Ask the same question both ways
+and the contrast is the argument for the whole project: one answer you can
+check, one you cannot.
+
+The unsourced mode is built so it can never be mistaken for the sourced one —
+amber frame instead of violet, a banner before the prose, and no source table.
+Any `[n]` marker the model emits there is stripped, because with no sources
+every citation is invented by definition. Its prompt also forbids presenting
+anything as a quotation or naming a chapter or line number: a remembered
+citation that *looks* precise is the exact failure the sourced mode exists to
+prevent, and producing one would defeat the comparison.
+
+```bash
+philo ask "what did Mill say about liberty?" --no-sources
+```
+
 ### Choosing a model
 
 The filter row has a model picker, grouped by provider and remembered between
@@ -482,7 +507,7 @@ turns the resulting 404 into a message that says so.
 ## Development
 
 ```bash
-make test                     # 120 tests, offline, no key required
+make test                     # 142 tests, offline, no key required
 .venv/bin/python -m pytest tests -q
 ```
 

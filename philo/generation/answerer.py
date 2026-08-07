@@ -19,7 +19,12 @@ from ..providers.base import Provider, StreamCallback
 from ..retrieval.retriever import RetrievalResult, Retriever
 from ..store.vector_store import Filters, VectorStore
 from ..util import detect_language, truncate
-from .prompts import audit_markers, build_answer_messages, split_two_layer
+from .prompts import (
+    audit_markers,
+    build_answer_messages,
+    build_direct_messages,
+    split_two_layer,
+)
 
 
 @dataclass
@@ -35,6 +40,9 @@ class AskOptions:
     # fixed by whatever built the index, so it is deliberately not here.
     chat_model: str = ""
     chat_provider: str = ""
+    # False asks the model directly, with no retrieval and no sources. Kept
+    # as an explicit opt-out so the sourced path stays the default everywhere.
+    grounded: bool = True
 
 
 class Engine:
@@ -110,6 +118,9 @@ class Engine:
         lang = opt.lang or detect_language(question)
         started = time.perf_counter()
 
+        if not opt.grounded:
+            return self._ask_direct(question, opt, lang, history, stream_cb, started)
+
         # Resolve the backend before retrieving. A bad provider name should
         # fail immediately, not after the embedding work — and never turn
         # into a successful-looking "not in this library" when retrieval
@@ -168,6 +179,55 @@ class Engine:
             truncated=completion.truncated,
         )
         return answer, result
+
+    # ------------------------------------------------------------------
+    def _ask_direct(
+        self,
+        question: str,
+        opt: AskOptions,
+        lang: str,
+        history: Sequence[Message],
+        stream_cb: StreamCallback | None,
+        started: float,
+    ) -> tuple[Answer, RetrievalResult]:
+        """Answer with no retrieval — the model's own recollection.
+
+        Deliberately still passed through `audit_markers` with an empty valid
+        set: with no sources, *every* `[n]` the model emits is invented, and
+        stripping them keeps an unsourced answer from borrowing the visual
+        authority of a sourced one.
+        """
+        backend = self.chat_backend(opt)
+        messages = build_direct_messages(
+            question, lang=lang, history=list(history), reader_note=opt.reader_note
+        )
+        completion = backend.chat(
+            messages,
+            temperature=self.settings.temperature if opt.temperature is None else opt.temperature,
+            max_tokens=self.settings.max_tokens,
+            stream_cb=stream_cb,
+            task="direct",
+            model=opt.chat_model,
+        )
+        text, invented = audit_markers(completion.text, set())
+        plain, academic = split_two_layer(text)
+
+        answer = Answer(
+            question=question,
+            plain=plain,
+            academic=academic,
+            sources=[],
+            raw=completion.text,
+            grounded=False,
+            mode="direct",
+            provider=completion.provider or self.provider.name,
+            model=completion.model,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            usage=completion.usage,
+            invented_markers=invented,
+            truncated=completion.truncated,
+        )
+        return answer, RetrievalResult(query=question)
 
     # ------------------------------------------------------------------
     def _ungrounded(

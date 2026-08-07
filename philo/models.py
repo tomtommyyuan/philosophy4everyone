@@ -174,6 +174,11 @@ class Answer:
     sources: list[ScoredChunk] = field(default_factory=list)
     raw: str = ""               # unparsed model output, kept for debugging
     grounded: bool = True       # False when retrieval found nothing usable
+    # "sources" = answered from retrieved text; "direct" = the model's own
+    # recollection, no retrieval. Kept separate from `grounded` because a
+    # sourced answer that found nothing and an intentionally unsourced one
+    # need completely different presentation.
+    mode: str = "sources"
     provider: str = ""
     model: str = ""
     latency_ms: int = 0
@@ -197,6 +202,7 @@ class Answer:
             "plain": self.plain,
             "academic": self.academic,
             "grounded": self.grounded,
+            "mode": self.mode,
             "provider": self.provider,
             "model": self.model,
             "latency_ms": self.latency_ms,

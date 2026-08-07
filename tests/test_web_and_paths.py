@@ -394,3 +394,21 @@ def test_the_token_is_read_from_the_field_not_only_storage(client):
     # Persisted on `input`, which covers keystrokes, paste and autofill.
     assert 'tok.addEventListener("input"' in page
     assert 'tok.addEventListener("change"' not in page
+
+
+def test_the_page_offers_both_modes_and_marks_them_apart(client):
+    page = client.get("/").text
+    assert 'id="f-mode"' in page
+    assert 'data-grounded="1"' in page and 'data-grounded="0"' in page
+    # An unsourced answer gets its own frame and a banner before the prose.
+    assert "ungrounded" in page
+    assert "the model's own recollection" in page
+
+
+def test_ask_accepts_the_mode_flag(client):
+    sourced = client.post("/api/ask", json={"question": "what is in my control?"}).json()
+    direct = client.post(
+        "/api/ask", json={"question": "what is in my control?", "grounded": False}
+    ).json()
+    assert sourced["mode"] == "sources" and sourced["sources"]
+    assert direct["mode"] == "direct" and direct["sources"] == []
