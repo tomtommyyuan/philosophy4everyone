@@ -28,7 +28,7 @@ from rich.text import Text
 
 from ..config import Settings, env_report
 from ..util import human_count, human_ms
-from .components import L, bullet_list, hint, keyval, rule, status_bar
+from .components import TAGLINE, L, bullet_list, hint, keyval, rule, status_bar
 from .theme import AMBER, PANEL_BOX, TABLE_BOX, VIOLET, gradient_text
 
 # Headers the model emits as structure; hidden from the live draft because a
@@ -341,7 +341,7 @@ def help_view(commands: Sequence[tuple[str, str, str]], *, version: str = "") ->
     parts.append(Padding(gradient_text("P H I L O S O P H Y   F O R   E V E R Y O N E"), (0, 0, 0, 2)))
     parts.append(
         Padding(
-            Text("every claim carries its source · 每一句都有出处", style="muted"),
+            Text(TAGLINE, style="muted"),
             (0, 0, 1, 2),
         )
     )
