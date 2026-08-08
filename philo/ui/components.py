@@ -71,13 +71,18 @@ def L(key: str, lang: str = "en") -> str:
 # Chrome
 # --------------------------------------------------------------------------
 
+# The one place the tagline lives, so the terminal and the help screen cannot
+# drift apart. The web page carries its own copy — it is a static file with
+# nothing to import from.
+TAGLINE = "plain words, real books · 让哲学说人话，句句有据"
+
 
 def banner(*, compact: bool = False, tagline: str = "") -> RenderableType:
     wordmark = gradient_text("P H I L O S O P H Y   F O R   E V E R Y O N E")
     if compact:
         return Padding(wordmark, (0, 0, 0, 1))
 
-    sub = tagline or "every claim carries its source · 每一句都有出处"
+    sub = tagline or TAGLINE
     body = Group(
         Text(""),
         Padding(wordmark, (0, 0, 0, 2)),
