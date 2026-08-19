@@ -93,3 +93,94 @@ def test_a_missing_file_is_an_empty_book_not_an_error(tmp_path: Path):
 def test_the_chronicle_lives_next_to_the_profiles(settings):
     assert settings.chronicle_dir.name == "chronicle"
     assert settings.chronicle_dir.parent == settings.profiles_dir.parent
+
+
+# --------------------------------------------------------------------------
+# Resurfacing
+# --------------------------------------------------------------------------
+
+from philo.chronicle import rhymes                      # noqa: E402
+from philo.chronicle.resurface import Echo, _age_days   # noqa: E402
+from philo.corpus.ingest import ingest                  # noqa: E402
+from philo.providers.mock import MockProvider           # noqa: E402
+from philo.store.vector_store import VectorStore        # noqa: E402
+
+OLD = "2025-11-02T09:00:00+00:00"
+TODAY = "2026-02-02"
+
+
+@pytest.fixture
+def indexed(settings, provider: MockProvider):
+    ingest(settings, provider)
+    return VectorStore(settings.index_dir).load()
+
+
+def test_a_saved_passage_is_matched_by_its_vector_already_in_the_index(indexed, provider):
+    """No second embedding call, and none stored: the index has it."""
+    chunk = next(c for c in indexed.chunks if "disturbed" in c.text)
+    book = Chronicle(Path("/dev/null"))
+    book.entries = [Entry(kind="passage", text=chunk.text, chunk_id=chunk.id, created=OLD)]
+
+    query = "why am I disturbed by things that happen?"
+    echoes = rhymes(book, query, store=indexed, query_vec=provider.embed_query(query),
+                    today=TODAY, vector_floor=0.05)
+    assert len(echoes) == 1
+    assert echoes[0].how == "vector"
+
+
+def test_entries_with_no_chunk_fall_back_to_words(indexed, provider):
+    book = Chronicle(Path("/dev/null"))
+    book.entries = [Entry(kind="decision", text="should I take the job?",
+                          note="the job in another city", created=OLD)]
+    echoes = rhymes(book, "should I take the job or stay?", store=indexed,
+                    query_vec=provider.embed_query("x"), today=TODAY)
+    assert [e.how for e in echoes] == ["words"]
+
+
+def test_one_shared_word_is_a_coincidence_not_an_echo(indexed, provider):
+    book = Chronicle(Path("/dev/null"))
+    book.entries = [Entry(kind="question", text="what is water?", created=OLD)]
+    assert rhymes(book, "what is virtue, courage, water", store=indexed,
+                  query_vec=provider.embed_query("x"), today=TODAY) == []
+
+
+def test_vector_evidence_is_ranked_ahead_of_word_evidence(indexed, provider):
+    """The two measures are not comparable, so they are not interleaved."""
+    chunk = next(c for c in indexed.chunks if "disturbed" in c.text)
+    book = Chronicle(Path("/dev/null"))
+    book.entries = [
+        Entry(kind="question", text="disturbed opinions things happen terrible", created=OLD),
+        Entry(kind="passage", text=chunk.text, chunk_id=chunk.id, created=OLD),
+    ]
+    query = "disturbed opinions things happen terrible"
+    echoes = rhymes(book, query, store=indexed, query_vec=provider.embed_query(query),
+                    today=TODAY, vector_floor=0.05, limit=2)
+    assert [e.how for e in echoes] == ["vector", "words"]
+
+
+def test_something_saved_today_is_the_session_not_an_echo(indexed, provider):
+    chunk = indexed.chunks[0]
+    book = Chronicle(Path("/dev/null"))
+    book.entries = [Entry(kind="passage", text=chunk.text, chunk_id=chunk.id,
+                          created=f"{TODAY}T08:00:00+00:00")]
+    assert rhymes(book, chunk.text, store=indexed, query_vec=provider.embed_query(chunk.text),
+                  today=TODAY, vector_floor=0.0) == []
+
+
+def test_resurfacing_works_with_no_index_at_all():
+    book = Chronicle(Path("/dev/null"))
+    book.entries = [Entry(kind="decision", text="move city or stay", created=OLD)]
+    echoes = rhymes(book, "should I move city", today=TODAY)
+    assert [e.how for e in echoes] == ["words"]
+
+
+@pytest.mark.parametrize(
+    "days,expected",
+    [(3, "3 days ago"), (21, "3 weeks ago"), (95, "3 months ago"), (400, "a year ago")],
+)
+def test_age_is_stated_vaguely_because_the_exact_date_is_in_the_entry(days, expected):
+    assert Echo(entry=Entry(), score=1.0, how="vector", age_days=days).when == expected
+
+
+def test_an_unparseable_timestamp_is_treated_as_old_not_suppressed():
+    assert _age_days("not a date", TODAY) > 1000
