@@ -232,3 +232,76 @@ def test_council_serialises_to_json(engine: Engine):
     assert payload["held"] is True
     assert len(payload["positions"]) >= MIN_SEATS
     assert payload["positions"][0]["answer"]["sources"]
+
+
+# --------------------------------------------------------------------------
+# The dialectic
+# --------------------------------------------------------------------------
+
+
+def test_the_objection_may_only_use_the_other_traditions_texts(engine: Engine):
+    """An objection built from the text it objects to is not an objection."""
+    council = hold_council(engine, COUNCIL_Q, seats=2, k=3)
+    assert council.objection is not None
+
+    challenged = council.objection.against
+    used = {s.chunk.tradition for s in council.objection.sources}
+    assert challenged not in used
+    assert used <= set(council.objection.raised_by)
+
+
+def test_the_objection_lands_on_the_best_supported_position(engine: Engine):
+    council = hold_council(engine, COUNCIL_Q, seats=2, k=3)
+    strongest = max(council.spoken, key=lambda p: p.seat.score)
+    assert council.objection.against == strongest.seat.tradition
+
+
+def test_renumbering_does_not_repoint_the_positions_own_citations(engine: Engine):
+    """The objection numbers its sources from 1; the positions keep theirs."""
+    council = hold_council(engine, COUNCIL_Q, seats=2, k=3)
+    assert [s.marker for s in council.objection.sources] == list(
+        range(1, len(council.objection.sources) + 1)
+    )
+    for position in council.spoken:
+        assert [s.marker for s in position.answer.sources] == list(
+            range(1, len(position.answer.sources) + 1)
+        )
+
+
+def test_no_objection_is_staged_when_only_one_tradition_spoke(engine: Engine, monkeypatch):
+    monkeypatch.setattr(
+        "philo.generation.council.seat_council",
+        lambda result, **kw: [Seat(tradition="Stoicism", score=0.9, n_passages=3)],
+    )
+    council = hold_council(engine, COUNCIL_Q, seats=3, k=3)
+    assert council.objection is None
+
+
+def test_a_failed_objection_does_not_cost_the_reader_the_council(engine: Engine):
+    from philo.providers.base import ProviderError
+
+    original = engine.provider.chat
+
+    def fail_on_objection(messages, **kwargs):
+        if kwargs.get("task") == "objection":
+            raise ProviderError("rate limited")
+        return original(messages, **kwargs)
+
+    engine.provider.chat = fail_on_objection  # type: ignore[method-assign]
+    council = hold_council(engine, COUNCIL_Q, seats=2, k=3)
+    assert council.objection is None
+    assert council.held
+
+
+def test_the_objection_can_be_switched_off(engine: Engine):
+    council = hold_council(engine, COUNCIL_Q, seats=2, k=3, objection=False)
+    assert council.held
+    assert council.objection is None
+
+
+def test_the_objection_prompt_forbids_manufactured_disagreement():
+    from philo.generation.prompts import OBJECTION_SYSTEM
+
+    assert "do not really contradict" in OBJECTION_SYSTEM
+    assert "Manufacturing disagreement" in OBJECTION_SYSTEM
+    assert "Do not declare a winner" in OBJECTION_SYSTEM

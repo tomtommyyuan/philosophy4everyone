@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from ..models import Answer, ScoredChunk
@@ -39,7 +39,13 @@ from ..providers.base import ProviderError
 from ..retrieval.retriever import RetrievalResult
 from ..store.vector_store import Filters
 from ..util import detect_language
-from .prompts import audit_markers, build_council_messages, split_two_layer
+from .prompts import (
+    audit_markers,
+    build_council_messages,
+    build_objection_messages,
+    parse_sections,
+    split_two_layer,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .answerer import Engine
@@ -157,12 +163,44 @@ class Position:
 
 
 @dataclass
+class Objection:
+    """The dialectic pass: one position, challenged from the others' texts."""
+
+    against: str
+    raised_by: list[str] = field(default_factory=list)
+    text: str = ""
+    upshot: str = ""
+    sources: list[ScoredChunk] = field(default_factory=list)
+    raw: str = ""
+    invented_markers: set[int] = field(default_factory=set)
+    model: str = ""
+    provider: str = ""
+
+    @property
+    def stands(self) -> bool:
+        return bool(self.text.strip())
+
+    def to_dict(self) -> dict:
+        return {
+            "against": self.against,
+            "raised_by": self.raised_by,
+            "text": self.text,
+            "upshot": self.upshot,
+            "model": self.model,
+            "provider": self.provider,
+            "invented_markers": sorted(self.invented_markers),
+            "sources": [s.to_dict() for s in self.sources],
+        }
+
+
+@dataclass
 class Council:
     """The whole session: who sat, what each said, and what was raised against it."""
 
     question: str
     positions: list[Position] = field(default_factory=list)
     seats: list[Seat] = field(default_factory=list)
+    objection: Objection | None = None
     lang: str = "en"
     survey_candidates: int = 0
     best_score: float = 0.0
@@ -186,6 +224,7 @@ class Council:
             "lang": self.lang,
             "seats": [s.tradition for s in self.seats],
             "positions": [p.to_dict() for p in self.positions],
+            "objection": self.objection.to_dict() if self.objection else None,
             "survey_candidates": self.survey_candidates,
             "best_score": round(self.best_score, 4),
             "took_ms": self.took_ms,
@@ -204,13 +243,15 @@ def hold_council(
     reader_note: str = "",
     chat_model: str = "",
     chat_provider: str = "",
+    objection: bool = True,
 ) -> Council:
     """Run the survey, seat the traditions, and let each answer independently.
 
-    Cost is the honest headline: this is one embedding call and N chat
-    completions, where N is the number of seats. It is deliberately not
-    streamed — three or four completions arriving interleaved is noise, and
-    the value of the feature is in reading them side by side anyway.
+    Cost is the honest headline: this is one embedding call and N+1 chat
+    completions, where N is the number of seats (`objection=False` drops the
+    +1). It is deliberately not streamed — three or four completions arriving
+    interleaved is noise, and the value of the feature is in reading them side
+    by side anyway.
     """
     from .answerer import AskOptions
 
@@ -260,6 +301,12 @@ def hold_council(
 
     spoke = council.spoken
     council.model = spoke[0].answer.model if spoke and spoke[0].answer else ""
+
+    if objection and council.held:
+        council.objection = raise_objection(
+            council, backend, lang=lang, chat_model=chat_model
+        )
+
     council.took_ms = int((time.perf_counter() - started) * 1000)
     return council
 
@@ -325,3 +372,108 @@ def _position(
             truncated=completion.truncated,
         ),
     )
+
+
+# --------------------------------------------------------------------------
+# The dialectic
+# --------------------------------------------------------------------------
+
+# How many of the other traditions' passages the objection gets to work with.
+# Enough to find a real clash, few enough that the prompt stays about one
+# disagreement rather than becoming a second survey.
+OBJECTION_SOURCES = 6
+
+
+def raise_objection(
+    council: Council,
+    backend,
+    *,
+    lang: str = "en",
+    chat_model: str = "",
+) -> Objection | None:
+    """Turn the strongest position around and look for what refutes it.
+
+    The sources handed to this pass are the *other* seats' passages, never the
+    challenged position's own. An objection assembled from the text it is
+    objecting to is not an objection; it is a summary with an adversarial
+    tone. Confining the evidence is what makes the disagreement real.
+    """
+    spoke = council.spoken
+    if len(spoke) < MIN_SEATS:
+        return None
+
+    # Strongest by the retrieval that seated it — deterministic, and it means
+    # the challenge lands on the position the library best supports rather
+    # than on whichever one happened to be written most confidently.
+    target = max(spoke, key=lambda p: p.seat.score)
+    others = [p for p in spoke if p is not target]
+
+    hits = _renumber(_gather(others), limit=OBJECTION_SOURCES)
+    if not hits:
+        return None
+
+    position_text = target.answer.plain if target.answer else ""
+    messages = build_objection_messages(
+        council.question,
+        position_text,
+        hits,
+        against=target.seat.tradition,
+        others=[p.seat.tradition for p in others],
+        lang=lang,
+    )
+    try:
+        completion = backend.chat(
+            messages,
+            temperature=0.3,
+            max_tokens=900,
+            task="objection",
+            model=chat_model,
+        )
+    except ProviderError:
+        # The positions are the feature; the objection is the sharpening.
+        # Losing it should not cost the reader the council.
+        return None
+
+    text, invented = audit_markers(completion.text, {h.marker for h in hits})
+    sections = parse_sections(text)
+    body = sections.get("OBJECTION", "").strip()
+    if not body:
+        # No recognisable structure — keep whatever the model wrote rather
+        # than showing an empty panel.
+        body = sections.get("_PREAMBLE", "").strip() or text.strip()
+
+    return Objection(
+        against=target.seat.tradition,
+        raised_by=[p.seat.tradition for p in others],
+        text=body,
+        upshot=sections.get("UPSHOT", "").strip(),
+        sources=hits,
+        raw=completion.text,
+        invented_markers=invented,
+        model=completion.model,
+        provider=completion.provider or backend.name,
+    )
+
+
+def _gather(positions: list[Position]) -> list[ScoredChunk]:
+    """Every passage the other seats used, best first, one per chunk."""
+    seen: set[str] = set()
+    out: list[ScoredChunk] = []
+    for position in positions:
+        for hit in position.answer.sources if position.answer else []:
+            if hit.chunk.id in seen:
+                continue
+            seen.add(hit.chunk.id)
+            out.append(hit)
+    out.sort(key=lambda h: h.score, reverse=True)
+    return out
+
+
+def _renumber(hits: list[ScoredChunk], *, limit: int) -> list[ScoredChunk]:
+    """Fresh 1..N markers for the objection's own source block.
+
+    Copies rather than mutates: the markers on a position's hits are what its
+    own prose cites, and renumbering them in place would silently repoint
+    every citation already written.
+    """
+    return [replace(hit, marker=i) for i, hit in enumerate(hits[:limit], 1)]
