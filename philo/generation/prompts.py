@@ -319,6 +319,18 @@ _ALIASES = {
     "THE ARGUMENT IN FULL": "ACADEMIC",
     "ACADEMIC": "ACADEMIC",
     "学术补充": "ACADEMIC",
+    "WHAT THE PAPER CLAIMS": "CLAIMS",
+    "CLAIMS": "CLAIMS",
+    "这篇论文主张什么": "CLAIMS",
+    "WHERE THEY WOULD AGREE": "AGREE",
+    "AGREE": "AGREE",
+    "他会同意的地方": "AGREE",
+    "WHERE THEY WOULD OBJECT": "OBJECT",
+    "OBJECT": "OBJECT",
+    "他会反对的地方": "OBJECT",
+    "THE QUESTION THEY WOULD PUT": "PUTQ",
+    "THE QUESTION": "PUTQ",
+    "他会问的问题": "PUTQ",
     "WHAT IS HAPPENING": "FEELING",
     "WHAT'S HAPPENING": "FEELING",
     "FEELING": "FEELING",
@@ -846,3 +858,161 @@ def build_mood_messages(
         body += "(They did not say why. Do not guess at a cause — speak to the feeling itself.)\n"
     body += "\nWrite the check-in from the sources above."
     return [system(sys_text), user(body)]
+
+
+# --------------------------------------------------------------------------
+# Reading a paper
+# --------------------------------------------------------------------------
+
+
+THEMES_SYSTEM = """\
+You are given a modern paper. Say what it claims, in a way that a shelf of \
+pre-1930 philosophy could be searched with.
+
+This is a translation task, not a summary task. The paper's own vocabulary — \
+"benchmark", "ablation", "alignment", "throughput", "p-value" — retrieves \
+nothing from texts written before any of those words meant this. Your job is \
+to say the same claims in the terms the philosophical tradition would use: \
+knowledge from repeated observation, the authority of testimony, what a thing \
+is for, whether a rule can be willed universally, who is harmed and who \
+consents.
+
+Do not evaluate the paper. Do not mention {philosopher}. Do not editorialise. \
+If the paper is not really making a claim that philosophy has any purchase on, \
+say that plainly.
+
+## Output format
+
+Return exactly this one section, with this exact header, and nothing else:
+
+## WHAT THE PAPER CLAIMS
+Four to seven sentences. What the authors assert, what they assume, and what \
+they take to follow. Then one sentence naming the philosophical questions \
+this raises, in the tradition's own vocabulary. No bullet points, no jargon \
+from the paper unless you immediately restate it.
+
+Write in {language_instruction}
+"""
+
+
+PAPER_SYSTEM = """\
+Read a modern paper as **{philosopher}** would, and say what they would make \
+of it.
+
+## The distinction this whole task turns on
+
+{philosopher} never read this paper. Everything of the form "{philosopher} \
+would say…" is an inference *you* are drawing from what they wrote — not \
+something they wrote. Those two things must stay visibly apart:
+
+- When you state a position {philosopher} actually held, it must come from \
+the SOURCES block and carry its `[n]` marker. Never invent a quotation, a \
+work, or a section.
+- When you apply that position to this paper, say so in the sentence — "on \
+this principle he would have to hold…", "his argument at [2] leaves him no \
+room to accept…". The reader must always be able to see which half is the \
+record and which half is you.
+- Where {philosopher}'s texts genuinely do not settle what he would think, \
+say that. A confident answer you cannot support is worth less than an honest \
+gap.
+
+Do not write in the first person and do not impersonate. This is a reading, \
+not a séance. No "Ah, my dear reader" — no voice, no costume.
+
+Take the paper seriously on its own terms first. An objection that depends on \
+having misread it is worthless, and so is one that amounts to "this \
+philosopher would not have understood modern science".
+
+## Output format
+
+Return exactly these three sections, with these exact headers, and nothing \
+before, between or after them:
+
+## WHERE THEY WOULD AGREE
+What in this paper {philosopher} would recognise as right, or as continuous \
+with something they argued. Be specific about which claim of the paper, and \
+cite the position it meets `[n]`. If there is genuinely nothing, say so \
+rather than manufacturing agreement. Roughly 100–180 words.
+
+## WHERE THEY WOULD OBJECT
+The sharpest objection their position actually licenses — against what the \
+paper claims, not against a weaker version of it. Name the specific move in \
+the paper it targets. Cite `[n]`. Roughly 120–200 words.
+
+## THE QUESTION THEY WOULD PUT
+One question to the authors that they could actually answer, and that would \
+change something if they did. Not rhetorical. Two or three sentences.
+
+Direct and unpatronising. No filler.
+
+Write in {language_instruction}
+"""
+
+
+PAPER_UNSOURCED_NOTE = """\
+
+## No sources for this philosopher
+
+This library holds nothing by {philosopher}, so you have no passages and no \
+markers. That changes what you are allowed to do:
+
+- Do not produce any `[n]` citation, quotation, work title, section or line \
+number. A remembered citation that looks precise is the exact failure this \
+system exists to prevent.
+- Where you are confident of a position, state it plainly. Where you are \
+reconstructing or compressing several works, say so in the sentence.
+- Where scholars disagree about what they held, say it is contested.
+"""
+
+
+def build_themes_messages(
+    paper: str,
+    *,
+    philosopher: str = "",
+    lang: str = "en",
+) -> list[Message]:
+    sys_text = (
+        THEMES_SYSTEM
+        .replace("{philosopher}", philosopher or "any philosopher")
+        .replace("{language_instruction}", language_instruction(lang))
+    )
+    body = "THE PAPER\n=======\n'''\n" + paper + "\n'''\n\nSay what it claims."
+    return [system(sys_text), user(body)]
+
+
+def build_paper_messages(
+    paper: str,
+    hits: Sequence[ScoredChunk],
+    *,
+    philosopher: str,
+    claims: str = "",
+    lang: str = "en",
+    reader_note: str = "",
+) -> list[Message]:
+    sys_text = (
+        PAPER_SYSTEM
+        .replace("{philosopher}", philosopher)
+        .replace("{language_instruction}", language_instruction(lang))
+    )
+    if not hits:
+        sys_text += PAPER_UNSOURCED_NOTE.replace("{philosopher}", philosopher)
+    if reader_note:
+        sys_text += f"\n\n## About this reader\n{reader_note}"
+
+    parts = []
+    if hits:
+        parts.append(
+            f"SOURCES — {philosopher}'s own texts\n"
+            "=======\n"
+            f"{format_sources(hits)}\n"
+        )
+    else:
+        parts.append(
+            "SOURCES\n=======\n"
+            f"(none — this library holds nothing by {philosopher})\n"
+        )
+    if claims.strip():
+        parts.append(f"WHAT THE PAPER CLAIMS\n=======\n{claims.strip()}\n")
+    parts.append("THE PAPER\n=======\n'''\n" + paper + "\n'''\n")
+    parts.append(f"Read it as {philosopher} would.")
+    return [system(sys_text), user("\n".join(parts))]

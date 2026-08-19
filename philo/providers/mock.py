@@ -135,7 +135,9 @@ class MockProvider:
             text = _compose_direct(question, lang)
         elif task == "daily":
             text = _compose_daily(question, sources, lang)
-        elif not sources:
+        elif not sources and task not in ("themes", "paper"):
+            # themes never has sources; paper legitimately has none when the
+            # philosopher is not in the library.
             text = _compose_refusal(question, lang)
         elif task == "decision":
             text = _compose_decision(_parse_fenced(prompt) or question, sources, lang)
@@ -145,6 +147,10 @@ class MockProvider:
             text = _compose_objection(question, sources, lang)
         elif task == "mood":
             text = _compose_mood(prompt, sources, lang)
+        elif task == "themes":
+            text = _compose_themes(prompt, lang)
+        elif task == "paper":
+            text = _compose_paper(prompt, sources, lang)
         else:
             # answer, council — both want the two-layer shape.
             text = _compose_answer(question, sources, lang)
@@ -609,3 +615,62 @@ def _parse_fenced_any(prompt: str) -> str:
 
     m = _re.search(r'(?:IN THEIR WORDS|THE DECISION[^\n]*)\n"""\n(.*?)\n"""', prompt, _re.DOTALL)
     return m.group(1).strip() if m else ""
+
+
+def _paper_body(prompt: str) -> str:
+    import re as _re
+
+    m = _re.search(r"THE PAPER\n=+\n'''\n(.*?)\n'''", prompt, _re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
+def _compose_themes(prompt: str, lang: str) -> str:
+    """Offline, the honest reading of a paper is its own opening sentences."""
+    body = _paper_body(prompt)
+    lead = " ".join(split_sentences(body)[:3]) or truncate(body, 300)
+    # The paper's own words lead. This block is also the retrieval query, and
+    # a preamble in front of it dilutes the embedding with text about the mock
+    # rather than text about the paper.
+    if lang == "zh":
+        return (
+            "## WHAT THE PAPER CLAIMS\n"
+            f"{truncate(lead, 600)}\n\n"
+            "（以上是论文开头的原文。把它改写成传统自己的词汇，是真实模型要做的事。）"
+        )
+    return (
+        "## WHAT THE PAPER CLAIMS\n"
+        f"{truncate(lead, 600)}\n\n"
+        "(That is the paper's own opening, quoted. Rewriting it into the "
+        "tradition's vocabulary is the part a real model does.)"
+    )
+
+
+def _compose_paper(prompt: str, sources: list["_Source"], lang: str) -> str:
+    top = sources[:3]
+    if lang == "zh":
+        lines = ["## WHERE THEY WOULD AGREE",
+                 "离线模式不作推断。以下是检索到的这位哲学家的原文：" if top
+                 else "这个library里没有这位哲学家的文本，离线模式也没有可凭借的知识。"]
+        lines += [f"- 「{truncate(_key_sentences(s, '', 1)[0], 200)}」[{s.marker}]" for s in top]
+        lines += ["", "## WHERE THEY WOULD OBJECT",
+                  "他会反对什么，需要真实模型把上面的立场应用到这篇论文上。",
+                  "", "## THE QUESTION THEY WOULD PUT",
+                  "这一段同样需要推断，离线模式不作推断。"]
+        return "\n".join(lines)
+
+    lines = [
+        "## WHERE THEY WOULD AGREE",
+        "Offline mode does not infer. What it can show is the retrieved text:" if top
+        else "This library holds nothing by that philosopher, and the mock has no "
+             "knowledge of its own to fall back on.",
+    ]
+    lines += [f"- “{truncate(_key_sentences(s, '', 1)[0], 200)}” [{s.marker}]" for s in top]
+    lines += [
+        "",
+        "## WHERE THEY WOULD OBJECT",
+        "Applying those positions to this paper is the inference a real model makes.",
+        "",
+        "## THE QUESTION THEY WOULD PUT",
+        "Also an inference, and also not something the mock will pretend to.",
+    ]
+    return "\n".join(lines)

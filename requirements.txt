@@ -10,3 +10,4 @@ numpy>=1.24
 openai>=1.30
 anthropic>=0.40
 google-genai>=1.0
+pypdf>=5.0

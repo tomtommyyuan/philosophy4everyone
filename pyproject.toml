@@ -25,9 +25,11 @@ gemini = ["google-genai>=1.0"]
 fast = ["numpy>=1.24"]
 # The HTTP interface (`philo serve`, and any hosted deployment).
 web = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
+# Reading a PDF in `philo paper`. Pasted text needs nothing.
+pdf = ["pypdf>=5.0"]
 all = [
   "openai>=1.30", "anthropic>=0.40", "google-genai>=1.0",
-  "numpy>=1.24", "fastapi>=0.110", "uvicorn[standard]>=0.27",
+  "numpy>=1.24", "fastapi>=0.110", "uvicorn[standard]>=0.27", "pypdf>=5.0",
 ]
 
 [project.scripts]
