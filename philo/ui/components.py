@@ -53,6 +53,12 @@ LABELS: dict[str, tuple[str, str]] = {
     "work": ("Work", "著作"),
     "section": ("Section", "章节"),
     "relevance": ("Relevance", "相关度"),
+    "council": ("The council", "众说"),
+    "objection": ("The objection", "反对意见"),
+    "upshot": ("Where this leaves it", "分歧在哪里"),
+    "against": ("against", "针对"),
+    "raised_by": ("raised from", "依据"),
+    "silent": ("could not speak", "未能发言"),
     "tradition": ("Tradition", "传统"),
     "rights": ("Rights", "版权"),
     "chunks": ("Passages", "段落数"),
@@ -482,3 +488,124 @@ def bullet_list(items: Iterable[str], *, style: str = "muted", marker: str = "·
         out.append(f"  {marker} ", style="dim")
         out.append(item + "\n", style=style)
     return out
+
+
+# --------------------------------------------------------------------------
+# The council
+# --------------------------------------------------------------------------
+
+
+def council_view(
+    council: Any,
+    *,
+    lang: str = "en",
+    show_sources: bool = False,
+    show_academic: bool = True,
+) -> RenderableType:
+    """Positions stacked, then the objection.
+
+    Stacked rather than in columns: three philosophical arguments side by side
+    in an 80-column terminal become three columns of broken words. Reading
+    order carries the comparison well enough, and the seat score in each
+    title says which one the library best supports.
+    """
+    parts: list[RenderableType] = []
+
+    for position in council.positions:
+        parts.append(_position_panel(position, lang=lang, show_academic=show_academic))
+        if position.answer and show_sources:
+            parts.append(Text(""))
+            parts.append(Padding(source_cards(position.answer.sources, lang=lang, chars=300), (0, 2)))
+        parts.append(Text(""))
+
+    if getattr(council, "objection", None) and council.objection.stands:
+        parts.append(_objection_panel(council.objection, lang=lang))
+        parts.append(Text(""))
+        if show_sources:
+            parts.append(Padding(source_cards(council.objection.sources, lang=lang, chars=300), (0, 2)))
+            parts.append(Text(""))
+
+    return Group(*parts[:-1]) if parts else Text("—", style="dim")
+
+
+def _position_panel(position: Any, *, lang: str, show_academic: bool) -> RenderableType:
+    seat = position.seat
+    title = Text()
+    title.append("◗ ", style=f"bold {VIOLET}")
+    title.append(seat.tradition, style="heading")
+    if seat.philosophers:
+        title.append("  " + ", ".join(seat.philosophers[:3]), style="source.author")
+
+    if position.error:
+        body: RenderableType = Group(
+            Text(f"{L('silent', lang)} — {position.error}", style="warn"),
+        )
+        return Panel(
+            Padding(body, (1, 2)),
+            title=title,
+            title_align="left",
+            subtitle=None,
+            border_style="warn",
+            box=PANEL_BOX,
+            padding=0,
+        )
+
+    answer = position.answer
+    blocks: list[RenderableType] = [prose(answer.plain or "—")]
+    if show_academic and answer.academic.strip():
+        blocks.append(Text(""))
+        blocks.append(rule(L("academic", lang), style="frame.soft"))
+        blocks.append(prose(answer.academic))
+    blocks.append(Text(""))
+    blocks.append(sources_table(answer.sources, lang=lang, cited=answer.cited_markers))
+
+    return Panel(
+        Padding(Group(*blocks), (1, 2)),
+        title=title,
+        title_align="left",
+        subtitle=Text.assemble((f"{seat.score:.2f} ", "dim"), score_bar(seat.score, 6)),
+        subtitle_align="right",
+        border_style="frame",
+        box=PANEL_BOX,
+        padding=0,
+    )
+
+
+def _objection_panel(objection: Any, *, lang: str) -> RenderableType:
+    title = Text()
+    title.append("⟂ ", style=f"bold {AMBER}")
+    title.append(L("objection", lang), style="subheading")
+    title.append(f"  {L('against', lang)} ", style="dim")
+    title.append(objection.against, style="source.author")
+
+    blocks: list[RenderableType] = [prose(objection.text or "—")]
+    if objection.upshot.strip():
+        blocks.append(Text(""))
+        blocks.append(rule(L("upshot", lang), style="frame.soft"))
+        blocks.append(prose(objection.upshot))
+    blocks.append(Text(""))
+    blocks.append(sources_table(objection.sources, lang=lang))
+
+    return Panel(
+        Padding(Group(*blocks), (1, 2)),
+        title=title,
+        title_align="left",
+        subtitle=Text(
+            f"{L('raised_by', lang)} {', '.join(objection.raised_by)}", style="dim"
+        ),
+        subtitle_align="right",
+        border_style="warn",
+        box=PANEL_BOX,
+        padding=0,
+    )
+
+
+def council_footer(council: Any, *, lang: str = "en") -> Text:
+    bits = [
+        ("traditions", str(len(council.spoken))),
+        ("model", council.model or "—"),
+        ("took", human_ms(council.took_ms)),
+    ]
+    if council.objection is None and council.held:
+        bits.append(("objection", "not raised"))
+    return status_bar(bits)

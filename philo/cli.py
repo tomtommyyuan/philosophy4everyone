@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-from rich.console import Console
+from rich.console import Console, RenderableType
 from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
@@ -26,6 +26,7 @@ from .corpus.gutenberg import SOURCES, fetch_all, select
 from .corpus.ingest import ingest, preview_chunks
 from .corpus.loader import CorpusError
 from .generation.answerer import AskOptions, Conversation, Engine
+from .generation.council import DEFAULT_SEATS, MIN_SEATS, hold_council
 from .models import Answer
 from .personalize.daily import generate_daily
 from .personalize.profile import DEFAULT_PROFILE_NAME, LEVELS, Profile, list_profiles
@@ -39,6 +40,8 @@ from .ui import (
     answer_footer,
     answer_view,
     banner,
+    council_footer,
+    council_view,
     daily_card,
     doctor_view,
     error_panel,
@@ -64,6 +67,7 @@ COMMANDS = [
     ("ingest", "[--rebuild]", "read library/, chunk it, embed it, store it"),
     ("ask", '"question"', "answer from the texts, with sources"),
     ("chat", "", "a conversation that remembers the last few turns"),
+    ("council", '"question"', "3 traditions answer independently, then argue"),
     ("daily", "", "today's personalised Daily Philosophy"),
     ("search", '"query"', "retrieval only — see what would be sent to the model"),
     ("sources", "", "what is in the library"),
@@ -137,6 +141,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_chat.add_argument("--chat-provider", default="", help="openai | azure | anthropic | gemini")
     p_chat.add_argument("--plain", action="store_true")
     add_filters(p_chat)
+
+    # council
+    p_council = sub.add_parser("council", help="several traditions, answering independently")
+    p_council.add_argument("question", nargs="+")
+    p_council.add_argument("--seats", type=int, default=DEFAULT_SEATS,
+                           help=f"how many traditions to seat (default {DEFAULT_SEATS}, max 4)")
+    p_council.add_argument("-k", type=int, default=4, help="passages per tradition")
+    p_council.add_argument("--no-objection", action="store_true",
+                           help="skip the dialectic pass (saves one completion)")
+    p_council.add_argument("--model", default="", help="chat model for this run")
+    p_council.add_argument("--chat-provider", default="", help="openai | azure | anthropic | gemini")
+    p_council.add_argument("--plain", action="store_true", help="everyday layer only")
+    p_council.add_argument("--show-sources", "-s", action="store_true", help="print the passages")
+    p_council.add_argument("--profile", default="", help="write for this reader")
+    p_council.add_argument("--lang", default="", choices=["", "en", "zh"])
+    p_council.add_argument("--json", action="store_true")
 
     # daily
     p_daily = sub.add_parser("daily", help="today's personalised piece")
@@ -234,6 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "ingest": cmd_ingest,
         "ask": cmd_ask,
         "chat": cmd_chat,
+        "council": cmd_council,
         "daily": cmd_daily,
         "search": cmd_search,
         "sources": cmd_sources,
@@ -807,6 +828,86 @@ def cmd_chat(args: argparse.Namespace, settings: Settings, console: Console) -> 
         console.print(answer_footer(answer, offline=settings.is_offline))
         _warn_invented(console, answer)
         console.print()
+
+
+# --------------------------------------------------------------------------
+# council
+# --------------------------------------------------------------------------
+
+
+def cmd_council(args: argparse.Namespace, settings: Settings, console: Console) -> int:
+    question = " ".join(args.question).strip()
+    if not question:
+        console.print(error_panel("council", "No question given."))
+        return EXIT_USAGE
+
+    profile = _load_profile(settings, args.profile)
+    lang = args.lang or (profile.language if profile else "") or detect_language(question)
+    engine = _engine(settings)
+
+    if not args.json:
+        _header(console, settings)
+        console.print(rule(f"{L('question', lang)}"))
+        console.print(Padding(Text(question, style="question"), (1, 2, 1, 2)))
+
+    seats = max(1, min(args.seats, 4))
+    with Spinner(console, f"putting the question to {seats} traditions"):
+        council = hold_council(
+            engine,
+            question,
+            seats=seats,
+            k=args.k,
+            lang=lang,
+            reader_note=profile.reader_note() if profile else "",
+            chat_model=args.model,
+            chat_provider=args.chat_provider,
+            objection=not args.no_objection,
+        )
+
+    if args.json:
+        print(json.dumps(council.to_dict(), ensure_ascii=False, indent=2))
+        return EXIT_OK if council.held else EXIT_ERROR
+
+    if not council.held:
+        console.print(_council_declined(council, settings, lang))
+        return EXIT_ERROR
+
+    console.print(rule(f"{L('council', lang)}  ·  {len(council.spoken)}"))
+    console.print()
+    console.print(council_view(council, lang=lang, show_sources=args.show_sources,
+                               show_academic=not args.plain))
+    console.print()
+    console.print(council_footer(council, lang=lang))
+    for position in council.positions:
+        if position.answer:
+            _warn_invented(console, position.answer)
+    return EXIT_OK
+
+
+def _council_declined(council: Any, settings: Settings, lang: str) -> RenderableType:
+    """Why there was no council — which is a fact about the library, not the question.
+
+    Worth distinguishing carefully: nothing retrieved at all is a different
+    problem from one tradition monopolising the evidence, and they have
+    different fixes.
+    """
+    spoke = [p.seat.tradition for p in council.spoken]
+    if not council.seats:
+        body = (
+            f"Nothing in this library clears the relevance floor for that question "
+            f"— {council.survey_candidates} passages searched, best {council.best_score:.2f} "
+            f"against a {settings.min_score:.2f} floor."
+        )
+        hint_text = "Try `philo search` to see what does match, or add texts to library/."
+    else:
+        named = ", ".join(spoke) or ", ".join(s.tradition for s in council.seats)
+        body = (
+            f"Only one tradition here has passages on that question ({named}), so there is "
+            f"no council to hold. A debate staged between one voice and itself would be a "
+            f"lie about what the library contains."
+        )
+        hint_text = f"`philo ask` answers it from what is there. {MIN_SEATS} traditions are needed for a council."
+    return error_panel("council", body, hint_text=hint_text)
 
 
 # --------------------------------------------------------------------------

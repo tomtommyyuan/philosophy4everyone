@@ -169,7 +169,8 @@ def run(argv, capsys):
 def test_cli_help_lists_every_command(capsys):
     code, out = run(["--help"], capsys)
     assert code == 0
-    for command in ("ingest", "ask", "chat", "daily", "search", "sources", "profile", "doctor"):
+    for command in ("ingest", "ask", "chat", "council", "daily", "search", "sources",
+                    "profile", "doctor"):
         assert command in out
 
 
@@ -203,6 +204,30 @@ def test_cli_daily_json(cwd, capsys):
     piece = json.loads(out)
     assert piece["theme"]
     assert piece["sources"]
+
+
+def test_cli_council_json_carries_every_position(cwd, capsys):
+    code, out = run(
+        ["council", "what is excellence and what is in our control?", "--json", "--seats", "2"],
+        capsys,
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["held"] is True
+    traditions = {p["tradition"] for p in payload["positions"]}
+    assert traditions == {"Stoicism", "Daoism"}
+    for position in payload["positions"]:
+        cited = {s["chunk"]["tradition"] for s in position["answer"]["sources"]}
+        assert cited == {position["tradition"]}
+
+
+def test_cli_council_declines_rather_than_staging_a_debate(cwd, capsys, monkeypatch):
+    """One tradition is not a council, and the exit code should say so."""
+    monkeypatch.setenv("PHILO_MIN_SCORE", "0.99")
+    code, out = run(["council", "what is in our control?"], capsys)
+    assert code == 1
+    assert "Traceback" not in out
+    assert "relevance floor" in out
 
 
 def test_cli_reports_a_missing_index_without_a_traceback(tmp_path: Path, monkeypatch, capsys):

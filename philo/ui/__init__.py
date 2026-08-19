@@ -5,6 +5,8 @@ from .components import (
     answer_footer,
     answer_view,
     banner,
+    council_footer,
+    council_view,
     daily_card,
     deepest_section,
     library_table,
@@ -30,6 +32,7 @@ from .views import (
 
 __all__ = [
     "L", "Spinner", "StreamView", "answer_footer", "answer_view", "banner",
+    "council_footer", "council_view",
     "daily_card", "deepest_section", "doctor_view", "error_panel", "gradient_text",
     "help_view", "prose",
     "ingest_summary", "library_table", "make_console", "make_ingest_progress",
