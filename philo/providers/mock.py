@@ -143,6 +143,8 @@ class MockProvider:
             text = _compose_recap(_parse_record(prompt), sources, lang)
         elif task == "objection":
             text = _compose_objection(question, sources, lang)
+        elif task == "mood":
+            text = _compose_mood(prompt, sources, lang)
         else:
             # answer, council — both want the two-layer shape.
             text = _compose_answer(question, sources, lang)
@@ -553,3 +555,57 @@ def _compose_objection(question: str, sources: list["_Source"], lang: str) -> st
         "real model makes; the mock only shows what would be judged.",
     ]
     return "\n".join(lines)
+
+
+def _compose_mood(prompt: str, sources: list["_Source"], lang: str) -> str:
+    """Offline, the honest check-in is the passages themselves, by tradition."""
+    import re as _re
+
+    m = _re.search(r"TODAY THEY FEEL:\s*(.+)", prompt)
+    mood = m.group(1).strip() if m else "this"
+    reason = _parse_fenced_any(prompt)
+    seen: dict[str, "_Source"] = {}
+    for s in sources:
+        seen.setdefault(s.philosopher or "The text", s)
+    picked = list(seen.values())[:3]
+    query = reason or mood
+
+    if lang == "zh":
+        lines = [
+            "## WHAT IS HAPPENING",
+            f"你说今天感觉「{mood}」。" + (f"你写的是：{truncate(reason, 160)}" if reason else "")
+            + "离线模式不作解读，只把检索到的原文按出处列出来。",
+            "",
+            "## THE SCHOOLS",
+        ]
+        for s in picked:
+            lines += [f"**{s.philosopher or '原文'}。**「{truncate(_key_sentences(s, query, 1)[0], 200)}」[{s.marker}]", ""]
+        lines += ["## ONE THING", "把上面任意一句读两遍——一遍看它说了什么，一遍看它没说什么。"]
+        return "\n".join(lines)
+
+    lines = [
+        "## WHAT IS HAPPENING",
+        f"You said you feel {mood} today."
+        + (f" What you wrote: {truncate(reason, 160)}" if reason else "")
+        + " Offline mode does not interpret; it lays out the passages that matched.",
+        "",
+        "## THE SCHOOLS",
+    ]
+    for s in picked:
+        lines += [
+            f"**{s.philosopher or 'The text'}.** “{truncate(_key_sentences(s, query, 1)[0], 200)}” [{s.marker}]",
+            "",
+        ]
+    lines += [
+        "## ONE THING",
+        "Read any one line above twice — once for what it says, once for what it does not.",
+    ]
+    return "\n".join(lines)
+
+
+def _parse_fenced_any(prompt: str) -> str:
+    """The reader's own words, from whichever fenced block a prompt used."""
+    import re as _re
+
+    m = _re.search(r'(?:IN THEIR WORDS|THE DECISION[^\n]*)\n"""\n(.*?)\n"""', prompt, _re.DOTALL)
+    return m.group(1).strip() if m else ""

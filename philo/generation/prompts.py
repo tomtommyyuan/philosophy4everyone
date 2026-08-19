@@ -319,6 +319,14 @@ _ALIASES = {
     "THE ARGUMENT IN FULL": "ACADEMIC",
     "ACADEMIC": "ACADEMIC",
     "学术补充": "ACADEMIC",
+    "WHAT IS HAPPENING": "FEELING",
+    "WHAT'S HAPPENING": "FEELING",
+    "FEELING": "FEELING",
+    "这是怎么回事": "FEELING",
+    "THE SCHOOLS": "SCHOOLS",
+    "SCHOOLS": "SCHOOLS",
+    "各家会说什么": "SCHOOLS",
+    "ONE THING": "PRACTICE",
     "THE CHOICE": "CHOICE",
     "CHOICE": "CHOICE",
     "你在选的是什么": "CHOICE",
@@ -740,4 +748,101 @@ def build_recap_messages(
             + "\n"
         )
     body += "\nWrite the recap of their week."
+    return [system(sys_text), user(body)]
+
+
+# --------------------------------------------------------------------------
+# The check-in
+# --------------------------------------------------------------------------
+
+
+MOOD_SYSTEM = """\
+Someone has said how they are feeling today, and possibly why. You have \
+passages from philosophical texts that bear on it. Give them several \
+traditions' answers, short, in plain words.
+
+## What this is not
+
+Not therapy, not reassurance, not a motivational card. Do not tell them the \
+feeling is valid, do not tell them it will pass, do not congratulate them for \
+checking in. Someone who feels this way already knows how it feels; what they \
+do not have is what anyone thought about it.
+
+Not neutral either. Different schools genuinely disagree about anger, grief \
+and fear, and the disagreement is the point — a Stoic and an Epicurean do not \
+give the same advice, and flattening them into one wise voice wastes both.
+
+## The rule that overrides everything else
+
+Every philosophical claim and every quotation must come from the SOURCES \
+block, with its `[n]` marker. Never invent a line and attribute it to \
+anybody. If the sources do not really speak to this feeling, say so plainly \
+in the first section instead of stretching them.
+
+## Output format
+
+Return exactly these three sections, with these exact headers, and nothing \
+before, between or after them:
+
+## WHAT IS HAPPENING
+Two or three sentences naming the shape of it — what the feeling is doing, \
+what it is about. Plain words. If they gave a reason, work from *that*, not \
+from the mood label. No advice yet, no comfort.
+
+## THE SCHOOLS
+{n_schools} traditions, each as its own short paragraph, in this shape:
+
+**Tradition — Philosopher.** What this school says about it, in two or three \
+sentences, including one short quotation copied VERBATIM from the sources \
+with its `[n]`. Then one sentence on what that actually asks of them.
+
+Pick the {n_schools} that genuinely have something distinct to say here. \
+Where two schools would pull in opposite directions, put them next to each \
+other and let the difference stand — do not reconcile them.
+
+## ONE THING
+One small thing to try in the next ten minutes. Concrete enough to picture, \
+no equipment, no journalling. Not "reflect on your values". If the sources \
+suggest one, use theirs and cite it.
+
+Warm, direct, unpatronising. Short sentences. No filler.
+
+Write in {language_instruction}
+"""
+
+
+def build_mood_messages(
+    mood: str,
+    hits: Sequence[ScoredChunk],
+    *,
+    reason: str = "",
+    lang: str = "en",
+    reader_note: str = "",
+    schools: int = 3,
+) -> list[Message]:
+    sys_text = (
+        MOOD_SYSTEM
+        .replace("{n_schools}", str(max(2, min(schools, 4))))
+        .replace("{language_instruction}", language_instruction(lang))
+    )
+    if reader_note:
+        sys_text += f"\n\n## About this reader\n{reader_note}"
+
+    body = (
+        "SOURCES\n"
+        "=======\n"
+        f"{format_sources(hits)}\n\n"
+        "=======\n"
+        f"TODAY THEY FEEL: {mood}\n"
+    )
+    if reason.strip():
+        body += (
+            "IN THEIR WORDS\n"
+            '"""\n'
+            f"{truncate(reason.strip(), 1200)}\n"
+            '"""\n'
+        )
+    else:
+        body += "(They did not say why. Do not guess at a cause — speak to the feeling itself.)\n"
+    body += "\nWrite the check-in from the sources above."
     return [system(sys_text), user(body)]
