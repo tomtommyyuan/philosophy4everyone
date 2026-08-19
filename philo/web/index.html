@@ -80,12 +80,13 @@ nav.tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:va
   padding:6px; box-shadow:var(--shadow);
 }
 .askrow { display:flex; gap:8px; align-items:flex-end; }
-textarea#q {
+/* Every composer, not just the Ask one — #theme had been missed. */
+.askrow textarea {
   flex:1; resize:none; border:0; outline:none; background:transparent; color:var(--ink);
   font-family:var(--serif); font-size:18px; line-height:1.5; padding:14px 14px 10px;
   min-height:56px; max-height:200px;
 }
-textarea#q::placeholder { color:var(--faint); }
+.askrow textarea::placeholder { color:var(--faint); }
 button.primary {
   appearance:none; border:0; border-radius:10px; cursor:pointer;
   background:var(--violet); color:#fff; font:inherit; font-weight:600; font-size:14px;
@@ -208,6 +209,58 @@ button.ghost.danger:hover { color:var(--err); border-color:var(--err); }
 }
 .src .credit { margin-top:10px; font-family:var(--sans); font-size:12px; color:var(--faint); }
 
+/* ---- council ---- */
+.seat > h2 { justify-content:space-between; }
+.seat .who { color:var(--muted); font-weight:600; letter-spacing:0; text-transform:none;
+             font-size:12.5px; margin-left:auto; padding-left:14px; text-align:right; }
+.seat .weight { font-family:var(--mono); font-size:11px; color:var(--faint); flex:none; }
+.card.objection { border-color:var(--amber); }
+.card.objection > h2 { color:var(--amber); border-bottom-color:var(--amber-bg); }
+.card.objection > h2::before { content:"\22A5"; }
+.upshot {
+  margin-top:16px; padding-top:14px; border-top:1px solid var(--line-soft);
+}
+.upshot h4 {
+  margin:0 0 8px; font-size:11.5px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--muted); font-weight:700;
+}
+.seatline { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0 2px; }
+.seatline span {
+  font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px;
+  padding:3px 11px; background:var(--panel);
+}
+.seatline span.out { opacity:.5; text-decoration:line-through; }
+
+/* ---- chronicle ---- */
+.keep {
+  appearance:none; background:none; border:1px solid var(--line); border-radius:7px;
+  color:var(--faint); font:inherit; font-size:11px; padding:2px 9px; cursor:pointer;
+  margin-left:10px; flex:none;
+}
+.keep:hover { color:var(--amber); border-color:var(--amber); }
+.keep.on { color:var(--amber); border-color:var(--amber); background:var(--amber-bg); }
+.entry {
+  border:1px solid var(--line); border-radius:12px; background:var(--panel);
+  padding:12px 16px; margin-bottom:8px; display:flex; gap:12px; align-items:flex-start;
+}
+.entry .glyph { color:var(--amber); font-size:13px; flex:none; line-height:1.7; }
+.entry .meat { flex:1; min-width:0; }
+.entry .what { font-family:var(--serif); font-size:15.5px; line-height:1.6; }
+.entry.saved .what { color:var(--muted); }
+.entry .meta { font-size:12px; color:var(--faint); margin-top:5px; }
+.entry .drop {
+  appearance:none; background:none; border:0; color:var(--faint); cursor:pointer;
+  font:inherit; font-size:16px; line-height:1; padding:2px 4px; flex:none;
+}
+.entry .drop:hover { color:var(--err); }
+.echo {
+  border-left:2px solid var(--amber); padding:2px 0 2px 14px; margin:16px 0 0;
+  font-size:13.5px; color:var(--muted);
+}
+.echo b { color:var(--amber); font-weight:600; }
+.counts { display:flex; gap:18px; margin:0 0 16px; font-size:12.5px; color:var(--faint); }
+.counts b { color:var(--ink); font-weight:650; }
+
 /* ---- daily ---- */
 .daily-title { font-family:var(--serif); font-size:25px; line-height:1.3; margin:0 0 14px; font-weight:600; }
 .practice {
@@ -275,7 +328,9 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
 
 <nav class="tabs" role="tablist">
   <button role="tab" data-tab="ask" aria-selected="true">Ask</button>
+  <button role="tab" data-tab="council" aria-selected="false">Council</button>
   <button role="tab" data-tab="daily" aria-selected="false">Daily</button>
+  <button role="tab" data-tab="chronicle" aria-selected="false">Chronicle</button>
   <button role="tab" data-tab="library" aria-selected="false">Library</button>
 </nav>
 
@@ -319,6 +374,33 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
   <div class="examples" id="examples"></div>
 </section>
 
+<!-- ============================ COUNCIL ============================ -->
+<section id="tab-council" class="hidden">
+  <form class="askbox" id="councilform">
+    <div class="askrow">
+      <textarea id="cq" rows="1" placeholder="Is it ever right to break a promise?" autocomplete="off"></textarea>
+      <button class="primary" type="submit">Convene</button>
+    </div>
+    <div class="filters">
+      <select id="c-seats">
+        <option value="3">3 traditions</option>
+        <option value="2">2 traditions</option>
+        <option value="4">4 traditions</option>
+      </select>
+      <select id="c-k">
+        <option value="4">4 passages each</option>
+        <option value="2">2 passages each</option>
+        <option value="6">6 passages each</option>
+      </select>
+      <label class="toggle"><input type="checkbox" id="c-objection" checked> Raise an objection</label>
+    </div>
+    <div class="hintline">Each tradition answers on its own, sourced only from its own texts — then the
+      best-supported position is challenged from the others'. Costs one model call per tradition, plus one
+      for the objection.</div>
+  </form>
+  <div id="council-out"></div>
+</section>
+
 <!-- ============================ DAILY ============================ -->
 <section id="tab-daily" class="hidden">
   <form class="askbox" id="dailyform">
@@ -329,6 +411,27 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
     <div class="hintline">One short, fully sourced piece. The theme is chosen deterministically from the date and the reader profile, so the same day always gives the same piece.</div>
   </form>
   <div id="daily-out"></div>
+</section>
+
+<!-- ============================ CHRONICLE ============================ -->
+<section id="tab-chronicle" class="hidden">
+  <form class="askbox" id="decideform">
+    <div class="askrow">
+      <textarea id="dq" rows="1" placeholder="A decision you are actually facing — should I say what I think in tomorrow's meeting?"></textarea>
+      <button class="primary" type="submit">Think it through</button>
+    </div>
+    <div class="hintline">The texts supply the questions; the decision stays yours. Nothing here is
+      stored on the server — your chronicle lives in this browser.</div>
+  </form>
+  <div id="decide-out"></div>
+
+  <div class="threadbar" style="margin-top:26px">
+    <div class="counts" id="chron-counts" style="margin:0;flex:1"></div>
+    <button type="button" id="c-recap" class="ghost">Read the week back</button>
+    <button type="button" id="c-export" class="ghost">Export</button>
+  </div>
+  <div id="recap-out"></div>
+  <div id="chron-list"></div>
 </section>
 
 <!-- ============================ LIBRARY ============================ -->
@@ -495,17 +598,204 @@ function sourceList(sources) {
     const where = [c.work_title, c.section].filter(Boolean).join(" · ");
     const credit = [c.translator && ("tr. " + c.translator), c.tradition, c.rights]
       .filter(Boolean).map(esc).join(" &nbsp;·&nbsp; ");
-    return `<details class="src" id="src-${s.marker}">
+    const kept = isKept(c.id);
+    return `<details class="src" data-src="${s.marker}">
       <summary>
         <span class="n">${s.marker}</span>
         <span><span class="who">${esc(c.philosopher || "—")}</span>
               <span class="where"> ${esc(where)}</span></span>
         ${meter(s.score)}
+        <button type="button" class="keep${kept ? " on" : ""}" data-keep="${esc(c.id)}"
+                title="Keep this passage in your chronicle">${kept ? "kept" : "keep"}</button>
       </summary>
       <div class="passage">${esc(c.text)}<div class="credit">${credit}</div></div>
     </details>`;
   }).join("");
   return `<div class="sources"><h3>Sources · ${sources.length}</h3>${items}</div>`;
+}
+
+function wireKeep(root, sources) {
+  const byId = Object.fromEntries((sources || []).map(s => [s.chunk.id, s.chunk]));
+  $$(".keep", root).forEach(el => el.addEventListener("click", e => {
+    // Inside a <summary>: without this the click also toggles the passage open.
+    e.preventDefault(); e.stopPropagation();
+    const chunk = byId[el.dataset.keep];
+    if (!chunk) return;
+    const on = toggleKeep(chunk);
+    el.classList.toggle("on", on);
+    el.textContent = on ? "kept" : "keep";
+  }));
+}
+
+/* ---------------- the chronicle (this browser only) ---------------- */
+const CHRON_KEY = "philo.chronicle";
+const MAX_ENTRIES = 200;
+let CHRON = [];
+
+function loadChronicle() {
+  try { CHRON = JSON.parse(localStorage.getItem(CHRON_KEY) || "[]"); }
+  catch { CHRON = []; }
+  if (!Array.isArray(CHRON)) CHRON = [];
+}
+function saveChronicle() {
+  CHRON = CHRON.slice(-MAX_ENTRIES);
+  try { localStorage.setItem(CHRON_KEY, JSON.stringify(CHRON)); }
+  catch { CHRON = CHRON.slice(-40); localStorage.setItem(CHRON_KEY, JSON.stringify(CHRON)); }
+}
+function isKept(chunkId) { return CHRON.some(e => e.chunk_id && e.chunk_id === chunkId); }
+
+function keptBefore(chunkId, minDays = 2) {
+  // Kept a minute ago is the session you are in, not something resurfacing —
+  // the same rule the CLI applies. An exact chunk match is stronger evidence
+  // than any similarity score, and costs nothing: no request, no embedding.
+  const found = CHRON.find(e => e.chunk_id === chunkId);
+  if (!found) return null;
+  const age = (Date.now() - Date.parse(found.created || 0)) / 86400000;
+  return age >= minDays ? found : null;
+}
+
+function toggleKeep(chunk) {
+  const at = CHRON.findIndex(e => e.chunk_id === chunk.id);
+  if (at >= 0) { CHRON.splice(at, 1); saveChronicle(); renderChronicle(); return false; }
+  CHRON.push({
+    kind: "passage", created: new Date().toISOString(), text: chunk.text, note: "",
+    chunk_id: chunk.id, philosopher: chunk.philosopher || "",
+    work_title: chunk.work_title || "", section: chunk.section || "",
+  });
+  saveChronicle(); renderChronicle(); return true;
+}
+
+function recordQuestion(question) {
+  CHRON.push({ kind: "question", created: new Date().toISOString(), text: question });
+  saveChronicle();
+}
+
+function renderChronicle() {
+  const counts = { passage: 0, decision: 0, question: 0 };
+  CHRON.forEach(e => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+  const box = $("#chron-counts");
+  if (box) {
+    box.innerHTML = `<span><b>${counts.passage}</b> saved</span>
+      <span><b>${counts.decision}</b> decided</span>
+      <span><b>${counts.question}</b> asked</span>`;
+  }
+
+  const list = $("#chron-list");
+  if (!list) return;
+  if (!CHRON.length) {
+    list.innerHTML = `<div class="hintline" style="padding:16px 2px">Nothing kept yet.
+      Press <b>keep</b> beside any source on the Ask tab, or write down a decision above.</div>`;
+    return;
+  }
+  const glyph = { passage: "❝", decision: "◆", question: "?" };
+  list.innerHTML = CHRON.slice().reverse().map((e, i) => {
+    const where = [e.philosopher, e.work_title, e.section].filter(Boolean).join(" · ");
+    const day = (e.created || "").slice(0, 10);
+    return `<div class="entry ${e.kind === "passage" ? "saved" : ""}">
+      <span class="glyph">${glyph[e.kind] || "·"}</span>
+      <span class="meat">
+        <div class="what">${esc((e.note || e.text || "").slice(0, 400))}</div>
+        <div class="meta">${esc(day)}${where ? " &nbsp;·&nbsp; " + esc(where) : ""}</div>
+      </span>
+      <button type="button" class="drop" data-drop="${CHRON.length - 1 - i}"
+              title="Forget this">&times;</button>
+    </div>`;
+  }).join("");
+  $$("#chron-list .drop").forEach(el => el.addEventListener("click", () => {
+    CHRON.splice(Number(el.dataset.drop), 1);
+    saveChronicle(); renderChronicle();
+  }));
+}
+
+function recentEntries(days) {
+  const cut = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  return CHRON.filter(e => (e.created || "").slice(0, 10) >= cut).slice(-MAX_ENTRIES);
+}
+
+function echoBlock(echoes) {
+  if (!echoes || !echoes.length) return "";
+  return echoes.map(e => {
+    const where = [e.entry.philosopher, e.entry.work_title].filter(Boolean).join(" · ");
+    return `<div class="echo"><b>↺ you kept this ${esc(e.when)}</b> —
+      ${esc((e.entry.text || e.entry.note || "").slice(0, 180))}${where ? " &nbsp;" + esc(where) : ""}</div>`;
+  }).join("");
+}
+
+async function decide(situation) {
+  if (!situation.trim()) return;
+  const button = $("#decideform button.primary");
+  button.disabled = true;
+  paint("#decide-out", `<div class="card"><h2>Reading the texts against your situation</h2>
+      <div class="streaming pulse">…</div></div>`);
+  try {
+    const pick = chosenModel();
+    const d = await api("/api/decide", {
+      method: "POST",
+      body: JSON.stringify({
+        situation, entries: CHRON.slice(-MAX_ENTRIES),
+        model: pick.model || "", provider: pick.provider || "",
+      }),
+    });
+    if (!d.grounded) {
+      paint("#decide-out", `<div class="notice warn">${markdown(d.choice)}</div>`);
+    } else {
+      let html = "";
+      for (const [title, body] of [["What you are choosing", d.choice],
+                                   ["What the texts would ask", d.tests],
+                                   ["What they do not settle", d.limits]]) {
+        if (body && body.trim()) {
+          html += `<div class="card"><h2>${title}</h2>
+            <div class="body serif">${markdown(body)}</div></div>`;
+        }
+      }
+      html += echoBlock(d.echoes) + sourceList(d.sources);
+      html += `<div class="foot">via ${esc(d.provider)}  ·  ${esc(d.model)}  ·  ${d.took_ms} ms</div>`;
+      paint("#decide-out", html);
+      const root = $("#decide-out");
+      wireKeep(root, d.sources);
+    }
+    // Recorded whether or not anything could be quoted: the record is yours.
+    CHRON.push({ kind: "decision", created: new Date().toISOString(),
+                 text: situation.trim(), note: "" });
+    saveChronicle(); renderChronicle();
+    $("#dq").value = "";
+  } catch (err) {
+    paint("#decide-out", errorCard(err));
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function recap() {
+  const entries = recentEntries(7);
+  if (!entries.length) {
+    paint("#recap-out", `<div class="notice warn"><b>Nothing recorded in the last 7 days.</b>
+      Press <b>keep</b> beside a source, or write down a decision, and there will be a week to read back.</div>`);
+    return;
+  }
+  paint("#recap-out", `<div class="card"><h2>Reading your week back</h2>
+      <div class="streaming pulse">…</div></div>`);
+  try {
+    const pick = chosenModel();
+    const r = await api("/api/recap", {
+      method: "POST",
+      body: JSON.stringify({ entries, days: 7, model: pick.model || "", provider: pick.provider || "" }),
+    });
+    let html = "";
+    for (const [title, body] of [["The week", r.week], ["The thread", r.thread],
+                                 ["What to sit with", r.sit_with]]) {
+      if (body && body.trim()) {
+        html += `<div class="card"><h2>${title}</h2>
+          <div class="body serif">${markdown(body)}</div></div>`;
+      }
+    }
+    html += echoBlock(r.echoes) + sourceList(r.sources);
+    html += `<div class="foot">${r.n_entries} entries  ·  ${esc(r.model || "")}  ·  ${r.took_ms} ms</div>`;
+    paint("#recap-out", html);
+    wireKeep($("#recap-out"), r.sources);
+  } catch (err) {
+    paint("#recap-out", errorCard(err));
+  }
 }
 
 function renderAnswer(a) {
@@ -533,6 +823,12 @@ function renderAnswer(a) {
     html += `<div class="card amber"><h2>The argument</h2>
       <div class="body">${markdown(a.academic)}</div></div>`;
   }
+  const seenBefore = (a.sources || []).filter(s => keptBefore(s.chunk.id));
+  if (seenBefore.length) {
+    html += `<div class="echo"><b>↺ you kept ${seenBefore.map(s => "[" + s.marker + "]").join(" ")} before</b>
+      — ${esc(seenBefore.map(s => [s.chunk.philosopher, s.chunk.work_title]
+              .filter(Boolean).join(" · ")).join("; "))}</div>`;
+  }
   html += sourceList(a.sources);
   const bits = [`via ${esc(a.provider)}`, esc(a.model),
                 `${a.sources.length} sources`, `${a.latency_ms} ms`];
@@ -547,8 +843,12 @@ function renderAnswer(a) {
 }
 
 function wireCitations(root) {
+  // Scoped to `root`, not looked up by a document-wide id: in the council
+  // three positions each number their own sources from [1], and a global
+  // lookup would send every one of those clicks to the first block on the
+  // page — silently citing the wrong tradition.
   $$(".cite", root).forEach(el => el.addEventListener("click", () => {
-    const target = $("#src-" + el.dataset.n);
+    const target = root.querySelector(`[data-src="${el.dataset.n}"]`);
     if (!target) return;
     target.open = true;
     target.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -562,11 +862,12 @@ function paint(where, html) {
   wireCitations(el);
 }
 
-function paintSlot(i, html) {
+function paintSlot(i, html, sources) {
   const el = slotFor(i);
   if (!el) return;
   el.innerHTML = html;
   wireCitations(el);
+  if (sources) wireKeep(el, sources);
 }
 function errorCard(err) {
   if (err.status === 401) {
@@ -623,7 +924,14 @@ function renderThread() {
       ${i > 0 ? '<div class="followup">follow-up — earlier turns are sent as context</div>' : ""}
       <div class="slot">${turn.a ? renderAnswer(turn.a) : ""}</div>
     </div>`).join("");
-  wireCitations(box);
+  // Per turn, not per thread: every answer in a conversation numbers its own
+  // sources from [1], so a thread-wide lookup would send a click in turn 3
+  // to turn 1's passage.
+  $$(".turn", box).forEach((el, i) => {
+    wireCitations(el);
+    const answer = THREAD.turns[i] && THREAD.turns[i].a;
+    if (answer) wireKeep(el, answer.sources);
+  });
   $("#examples").classList.toggle("hidden", THREAD.turns.length > 0);
 }
 
@@ -697,6 +1005,7 @@ async function ask(question) {
   history.replaceState(null, "", share);
 
   const turn = { q: question.trim(), a: null };
+  recordQuestion(turn.q);
   THREAD.turns.push(turn);
   if (!THREAD.title) { THREAD.title = turn.q; renderHistory(); }
   const index = THREAD.turns.length - 1;
@@ -762,6 +1071,97 @@ async function toError(res) {
   return e;
 }
 
+/* ---------------- council ---------------- */
+let councilBusy = false;
+async function council(question) {
+  if (councilBusy || !question.trim()) return;
+  councilBusy = true;
+  const button = $("#councilform button.primary");
+  button.disabled = true;
+
+  const pick = chosenModel();
+  const seats = Number($("#c-seats").value);
+  paint("#council-out", `<div class="card"><h2>Putting the question to ${seats} traditions</h2>
+      <div class="streaming pulse">Each one is answering separately…</div></div>`);
+  try {
+    const c = await api("/api/council", {
+      method: "POST",
+      body: JSON.stringify({
+        question,
+        seats,
+        k: Number($("#c-k").value),
+        objection: $("#c-objection").checked,
+        model: pick.model || "",
+        provider: pick.provider || "",
+      }),
+    });
+    paint("#council-out", renderCouncil(c));
+  } catch (err) {
+    paint("#council-out", errorCard(err));
+  } finally {
+    councilBusy = false;
+    button.disabled = false;
+  }
+}
+
+function renderCouncil(c) {
+  if (!c.held) {
+    // Two different failures with two different fixes: nothing cleared the
+    // floor at all, versus one tradition holding all the relevant text.
+    const spoke = c.positions.filter(p => p.answer);
+    const body = spoke.length
+      ? `<b>Only one tradition here has passages on that.</b>
+         ${esc(spoke.map(p => p.tradition).join(", "))} can answer it, but a debate staged
+         between one voice and itself would misrepresent what this library holds.
+         Ask it on the <b>Ask</b> tab instead.`
+      : `<b>Nothing in this library clears the relevance floor for that.</b>
+         ${c.survey_candidates} passages searched; the closest scored
+         ${Number(c.best_score).toFixed(2)} against a
+         ${Number(c.min_score || 0).toFixed(2)} floor. Try different words — the ones
+         the texts themselves would use.`;
+    return `<div class="notice warn">${body}</div>`;
+  }
+
+  const seated = c.positions.map(p =>
+    `<span class="${p.answer ? "" : "out"}">${esc(p.tradition)}</span>`).join("");
+  let html = `<div class="seatline">${seated}</div>`;
+
+  for (const p of c.positions) {
+    if (!p.answer) {
+      html += `<div class="card objection"><h2>${esc(p.tradition)}</h2>
+        <div class="body">Could not speak — ${esc(p.error || "unknown error")}</div></div>`;
+      continue;
+    }
+    const a = p.answer;
+    const who = p.philosophers.slice(0, 3).map(esc).join(", ");
+    html += `<div class="card seat"><h2>${esc(p.tradition)}
+        <span class="who">${who}</span>
+        <span class="weight">${Number(p.seat_score).toFixed(2)}</span></h2>
+      <div class="body serif">${markdown(a.plain)}`;
+    if (a.academic && a.academic.trim()) {
+      html += `<div class="upshot"><h4>The argument</h4>
+        <div style="font-family:var(--sans);font-size:15.5px">${markdown(a.academic)}</div></div>`;
+    }
+    html += `</div>${sourceList(a.sources)}</div>`;
+  }
+
+  if (c.objection) {
+    const o = c.objection;
+    html += `<div class="card objection"><h2>The objection
+        <span class="who">against ${esc(o.against)} · from ${esc(o.raised_by.join(", "))}</span></h2>
+      <div class="body serif">${markdown(o.text)}`;
+    if (o.upshot && o.upshot.trim()) {
+      html += `<div class="upshot"><h4>Where this leaves it</h4>${markdown(o.upshot)}</div>`;
+    }
+    html += `</div>${sourceList(o.sources)}</div>`;
+  }
+
+  html += `<div class="foot">${c.positions.filter(p => p.answer).length} traditions  ·
+      ${esc(c.model || "")}  ·  ${c.took_ms} ms  ·
+      ${c.objection ? "objection raised" : "no objection"}</div>`;
+  return html;
+}
+
 /* ---------------- daily ---------------- */
 async function daily(theme) {
   paint("#daily-out", `<div class="card"><h2>Composing</h2>
@@ -812,7 +1212,8 @@ async function library() {
 /* ---------------- tabs ---------------- */
 function switchTab(name) {
   $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
-  ["ask", "daily", "library"].forEach(t => $("#tab-" + t).classList.toggle("hidden", t !== name));
+  ["ask", "council", "daily", "chronicle", "library"].forEach(t =>
+    $("#tab-" + t).classList.toggle("hidden", t !== name));
   if (name === "library" && !$("#library-out").dataset.loaded) {
     $("#library-out").dataset.loaded = "1";
     library();
@@ -841,14 +1242,43 @@ const EXAMPLES = [
     $("#q").value = b.textContent; ask(b.textContent);
   }));
 
-  const q = $("#q");
-  const grow = () => { q.style.height = "auto"; q.style.height = Math.min(q.scrollHeight, 200) + "px"; };
-  q.addEventListener("input", grow);
-  q.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(q.value); }
-  });
+  // Grow-on-type and Enter-to-submit for every composer, each wired to its
+  // own action rather than three near-identical copies of the same handler.
+  const compose = (id, run) => {
+    const box = $(id);
+    box.addEventListener("input", () => {
+      box.style.height = "auto";
+      box.style.height = Math.min(box.scrollHeight, 200) + "px";
+    });
+    box.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(box.value); }
+    });
+    return box;
+  };
+  const q = compose("#q", v => ask(v));
+  const cq = compose("#cq", v => council(v));
+  const dq = compose("#dq", v => decide(v));
+  compose("#theme", v => daily(v.trim()));
+
   $("#askform").addEventListener("submit", e => { e.preventDefault(); ask(q.value); });
+  $("#councilform").addEventListener("submit", e => { e.preventDefault(); council(cq.value); });
+  $("#decideform").addEventListener("submit", e => { e.preventDefault(); decide(dq.value); });
   $("#dailyform").addEventListener("submit", e => { e.preventDefault(); daily($("#theme").value.trim()); });
+
+  loadChronicle();
+  renderChronicle();
+  $("#c-recap").addEventListener("click", recap);
+  $("#c-export").addEventListener("click", () => {
+    // Shown rather than downloaded: a sandboxed page cannot start a download,
+    // and a record you cannot get out of the browser is a record you do not own.
+    const text = CHRON.map(e => JSON.stringify(e)).join("\n");
+    paint("#recap-out", `<div class="card"><h2>Your chronicle · ${CHRON.length} entries</h2>
+      <div class="body"><div class="hintline" style="padding:0 0 10px">One JSON object per line —
+      the same format \`philo chronicle\` writes. Select all and copy.</div>
+      <textarea readonly style="width:100%;height:220px;font-family:var(--mono);font-size:12px;
+        background:var(--bg);color:var(--muted);border:1px solid var(--line);border-radius:8px;
+        padding:10px">${esc(text)}</textarea></div></div>`);
+  });
 
   loadThreads();
   renderThread();

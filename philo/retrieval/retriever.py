@@ -41,6 +41,10 @@ class RetrievalResult:
     filters: Filters | None = None
     took_ms: int = 0
     best_score: float = 0.0
+    # The embedding this search ran on. Carried so a caller that wants to
+    # compare something else against the same question — the Chronicle
+    # deciding what rhymes — does not have to pay for it twice.
+    query_vec: Sequence[float] | None = None
 
     @property
     def grounded(self) -> bool:
@@ -121,7 +125,15 @@ class Retriever:
         filters: Filters | None = None,
         min_score: float | None = None,
         diversify: bool = True,
+        query_vec: Sequence[float] | None = None,
     ) -> RetrievalResult:
+        """`query_vec` lets a caller supply the embedding it already has.
+
+        The council asks one question under several different filters. The
+        filters change which rows are compared; the query vector does not,
+        so re-embedding once per filter would be N-1 API calls spent to
+        recompute an identical answer.
+        """
         import time
 
         started = time.perf_counter()
@@ -135,7 +147,8 @@ class Retriever:
                 took_ms=int((time.perf_counter() - started) * 1000),
             )
 
-        query_vec = self.provider.embed_query(query)
+        if query_vec is None:
+            query_vec = self.provider.embed_query(query)
         dense_all = self.store.similarities(query_vec)
         dense = [dense_all[i] for i in candidate_idx]
 
@@ -188,6 +201,7 @@ class Retriever:
             filters=filters,
             best_score=best_dense,
             took_ms=int((time.perf_counter() - started) * 1000),
+            query_vec=query_vec,
         )
 
     # ------------------------------------------------------------------

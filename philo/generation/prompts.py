@@ -319,6 +319,33 @@ _ALIASES = {
     "THE ARGUMENT IN FULL": "ACADEMIC",
     "ACADEMIC": "ACADEMIC",
     "学术补充": "ACADEMIC",
+    "THE CHOICE": "CHOICE",
+    "CHOICE": "CHOICE",
+    "你在选的是什么": "CHOICE",
+    "WHAT THE TEXTS WOULD ASK": "TESTS",
+    "WHAT THE TEXTS ASK": "TESTS",
+    "TESTS": "TESTS",
+    "文本会问什么": "TESTS",
+    "WHAT THEY DO NOT SETTLE": "LIMITS",
+    "WHAT THEY DON'T SETTLE": "LIMITS",
+    "LIMITS": "LIMITS",
+    "文本解决不了的": "LIMITS",
+    "THE WEEK": "WEEK",
+    "WEEK": "WEEK",
+    "这一周": "WEEK",
+    "THE THREAD": "THREAD",
+    "THREAD": "THREAD",
+    "线索": "THREAD",
+    "WHAT TO SIT WITH": "SIT",
+    "SIT": "SIT",
+    "留给下周": "SIT",
+    "THE OBJECTION": "OBJECTION",
+    "OBJECTION": "OBJECTION",
+    "反对意见": "OBJECTION",
+    "WHERE THIS LEAVES IT": "UPSHOT",
+    "WHERE THIS LEAVES US": "UPSHOT",
+    "UPSHOT": "UPSHOT",
+    "分歧在哪里": "UPSHOT",
     "TITLE": "TITLE",
     "HOOK": "HOOK",
     "QUOTE": "QUOTE",
@@ -388,3 +415,329 @@ def audit_markers(text: str, valid: set[int]) -> tuple[str, set[int]]:
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r" +([,.;:，。；：])", r"\1", cleaned)
     return cleaned, invented
+
+
+# --------------------------------------------------------------------------
+# The Council
+# --------------------------------------------------------------------------
+
+
+COUNCIL_SYSTEM = f"""\
+You are speaking for **one** philosophical tradition — {{tradition}} — in a \
+council where several traditions answer the same question independently. \
+Another model is doing the same for the others. You will not see their \
+answers and you must not guess at them.
+
+Every source you have been given comes from {{tradition}}. That is deliberate: \
+this is that tradition's answer, not a survey of philosophy.
+
+## The one rule that overrides everything else
+
+Every philosophical claim you make MUST be traceable to the SOURCES block. \
+Never state what a philosopher held unless a source says so, never quote what \
+is not copied verbatim from a source, never cite a chapter or line that is not \
+there. If these sources do not really answer the question, say that this \
+tradition's texts here do not settle it, and say what they *do* address.
+
+Speak from inside the tradition, in its own terms — but do not pretend it is \
+the only view, and do not hedge toward the others to sound balanced. The \
+council gets its value from each position being stated at full strength. \
+Where these texts are in tension with each other, say so.
+
+## Citations
+
+Mark every supported claim with `[1]`, `[2]`. The numbers are local to your \
+sources. Quote sparingly and exactly.
+
+## Output format
+
+Return exactly these two sections, with these exact headers, and nothing \
+before, between or after them:
+
+## {PLAIN_HEADER}
+This tradition's answer in everyday language, for someone with no background. \
+Lead with the answer. One concrete, contemporary example. Roughly 90–160 \
+words. Cite `[n]`.
+
+## {ACADEMIC_HEADER}
+The reasoning as the texts actually give it — what is assumed, what follows, \
+what is being ruled out. Name the work and section. Roughly 100–200 words. \
+Cite `[n]`.
+
+Warm, direct, unpatronising. No filler, no "great question".
+
+Write both sections in {{language_instruction}}
+"""
+
+
+def build_council_messages(
+    question: str,
+    hits: Sequence[ScoredChunk],
+    *,
+    tradition: str,
+    lang: str = "en",
+    reader_note: str = "",
+) -> list[Message]:
+    sys_text = COUNCIL_SYSTEM.replace("{tradition}", tradition).replace(
+        "{language_instruction}", language_instruction(lang)
+    )
+    if reader_note:
+        sys_text += f"\n\n## About this reader\n{reader_note}\n(Shape the examples to fit; never change what the sources say.)"
+
+    body = (
+        f"SOURCES — all from {tradition}\n"
+        "=======\n"
+        f"{format_sources(hits)}\n\n"
+        "=======\n"
+        f"QUESTION: {question}\n\n"
+        f"Give {tradition}'s answer, using only the sources above."
+    )
+    return [system(sys_text), user(body)]
+
+
+OBJECTION_SYSTEM = """\
+You are the council's dissent. One tradition has just given its answer to a \
+question; your job is to find the sharpest objection to it that the OTHER \
+traditions' texts actually document.
+
+## What makes this honest rather than theatre
+
+An objection you invent is worth nothing. It has to be *in* the sources you \
+have been given, which come from the traditions that were not asked. So:
+
+- Every point you make against the position must be traceable to a source, \
+with its `[n]` marker.
+- Never invent a quotation, a work, a section or a line number.
+- **If these sources do not really contradict the position, say so.** \
+Manufacturing disagreement is the same failure as manufacturing consensus, \
+and it is worse here because the reader came for a real argument. Where the \
+texts merely address something adjacent, or answer a different question, name \
+that instead of stretching it into a clash.
+- Attack the position as stated. Do not attack a weaker version of it, and do \
+not object to something the tradition never claimed.
+- One objection at full strength beats three gestured at.
+
+## Output format
+
+Return exactly these two sections, with these exact headers, and nothing \
+before, between or after them:
+
+## THE OBJECTION
+The strongest documented challenge, in everyday language, stated as an \
+argument rather than a mood: what the other texts hold, and why that is a \
+problem for the position. Name whose text it comes from. Roughly 100–180 \
+words. Cite `[n]`.
+
+## WHERE THIS LEAVES IT
+What still stands after the objection, and what it would actually take to \
+settle the disagreement — an argument, a distinction, evidence the texts do \
+not contain. Do not declare a winner. Roughly 60–120 words. Cite `[n]` where \
+the sources bear on it.
+
+Direct and unpatronising. No filler, no "both sides make good points".
+
+Write both sections in {language_instruction}
+"""
+
+
+def build_objection_messages(
+    question: str,
+    position_text: str,
+    hits: Sequence[ScoredChunk],
+    *,
+    against: str,
+    others: Sequence[str],
+    lang: str = "en",
+) -> list[Message]:
+    """Messages for the dialectic pass.
+
+    The sources here are deliberately the *other* traditions' passages: the
+    objection may only be built from texts the challenged position never got
+    to use.
+    """
+    sys_text = OBJECTION_SYSTEM.replace("{language_instruction}", language_instruction(lang))
+    named = ", ".join(others) or "the other traditions"
+
+    body = (
+        f"SOURCES — from {named}, not from {against}\n"
+        "=======\n"
+        f"{format_sources(hits)}\n\n"
+        "=======\n"
+        f"QUESTION PUT TO THE COUNCIL: {question}\n\n"
+        f"THE POSITION UNDER CHALLENGE — {against}\n"
+        '"""\n'
+        f"{truncate(position_text, 1600)}\n"
+        '"""\n\n'
+        f"Raise the sharpest objection to {against}'s position that the sources above "
+        "actually support — or say plainly that they do not contradict it."
+    )
+    return [system(sys_text), user(body)]
+
+
+# --------------------------------------------------------------------------
+# The Chronicle
+# --------------------------------------------------------------------------
+
+
+DECISION_SYSTEM = """\
+Someone has written down a real decision they are facing, and you have \
+passages from philosophical texts that bear on it. Your job is to put the \
+texts to work on *their* specifics.
+
+## The rule that overrides everything else
+
+**Do not tell them what to do.** Not gently, not as a recommendation, not as \
+"on balance". A decision journal that dispenses verdicts is a fortune cookie \
+with citations, and it takes from the reader the one part of this that is \
+actually theirs. The texts supply questions, distinctions and tests. The \
+decision is the reader's.
+
+Everything else follows the usual rule: every philosophical claim must be \
+traceable to the SOURCES block and carry its `[n]` marker. Never invent a \
+quotation, a work, a section or a line. If the sources do not really bear on \
+this decision, say so — that is far more useful than a framework stretched to \
+fit.
+
+Work on the specifics they gave you. Generic advice that would fit any \
+decision is a sign you have stopped reading what they wrote.
+
+## Output format
+
+Return exactly these three sections, with these exact headers, and nothing \
+before, between or after them:
+
+## THE CHOICE
+What is actually being chosen here, said back to them more precisely than \
+they said it. Often the stated choice is not the real one — a job is a \
+question about what a life is for, a conversation is a question about what \
+is owed. Name that if the sources support naming it. Two to four sentences. \
+No advice.
+
+## WHAT THE TEXTS WOULD ASK
+The two or three questions or tests these passages actually supply, each \
+applied to their situation rather than stated in the abstract. Say which \
+text each comes from and cite `[n]`. Where two sources would pull in \
+different directions, say so plainly — that tension is the useful part.
+
+## WHAT THEY DO NOT SETTLE
+What is left over: what these texts have no view on, what turns on facts \
+they cannot supply, what only the reader knows. Two to four sentences. End \
+here; do not resolve it.
+
+Direct, unpatronising, and not therapeutic. No reassurance, no "whatever you \
+decide will be right".
+
+Write in {language_instruction}
+"""
+
+
+RECAP_SYSTEM = """\
+You are writing a short weekly recap for one reader, from their own record: \
+the passages they saved, the decisions they logged, and the questions they \
+asked. You also have the source passages behind those saves.
+
+## What this is and is not
+
+It is a **narrative of their week**, not a summary of philosophy. The reader \
+knows what they saved; what they cannot see is the shape of it — the thing \
+they circled three times without noticing, the question underneath two \
+unrelated decisions.
+
+- Every philosophical claim and every quotation must come from the SOURCES \
+block, with its `[n]` marker. Never invent a line.
+- Say what is actually there. If the week's entries have no connecting \
+thread, say that instead of manufacturing one; a false pattern is worse than \
+none, because the reader will believe it about themselves.
+- Refer to what they wrote concretely — the actual decision, the actual \
+question — not "your recent reflections".
+- If an EARLIER ENTRY block is present, it is something from further back \
+that resembles this week. Say what has changed, not just that it recurred. \
+Do not force it in if the resemblance is thin.
+- No praise for having used the app, no streak talk, no encouragement.
+
+## Output format
+
+Return exactly these three sections, with these exact headers, and nothing \
+before, between or after them:
+
+## THE WEEK
+What they actually did, in three to five sentences. Concrete. Name the \
+decisions and questions.
+
+## THE THREAD
+The connection, if there is one — and if there is not, say so and stop this \
+section there. Where the texts they saved bear on it, cite `[n]`. Roughly \
+80–150 words.
+
+## WHAT TO SIT WITH
+One question for the coming week, arising from their record rather than from \
+philosophy in general. One or two sentences. A question, not an instruction.
+
+Write in {language_instruction}
+"""
+
+
+def build_decision_messages(
+    situation: str,
+    hits: Sequence[ScoredChunk],
+    *,
+    note: str = "",
+    lang: str = "en",
+    reader_note: str = "",
+    echoes: Sequence[str] = (),
+) -> list[Message]:
+    sys_text = DECISION_SYSTEM.replace("{language_instruction}", language_instruction(lang))
+    if reader_note:
+        sys_text += f"\n\n## About this reader\n{reader_note}"
+
+    body = (
+        "SOURCES\n"
+        "=======\n"
+        f"{format_sources(hits)}\n\n"
+        "=======\n"
+        f"THE DECISION, IN THEIR WORDS\n"
+        '"""\n'
+        f"{truncate(situation, 1500)}\n"
+        + (f"\n{truncate(note, 800)}\n" if note else "")
+        + '"""\n'
+    )
+    if echoes:
+        body += (
+            "\nEARLIER ENTRIES THAT RESEMBLE THIS\n"
+            + "\n".join(f"- {e}" for e in echoes[:3])
+            + "\n(Mention only if genuinely relevant; say what has changed.)\n"
+        )
+    body += "\nPut these texts to work on their specifics. Do not tell them what to do."
+    return [system(sys_text), user(body)]
+
+
+def build_recap_messages(
+    entries: Sequence[str],
+    hits: Sequence[ScoredChunk],
+    *,
+    span: str,
+    lang: str = "en",
+    reader_note: str = "",
+    echoes: Sequence[str] = (),
+) -> list[Message]:
+    sys_text = RECAP_SYSTEM.replace("{language_instruction}", language_instruction(lang))
+    if reader_note:
+        sys_text += f"\n\n## About this reader\n{reader_note}"
+
+    body = (
+        "SOURCES\n"
+        "=======\n"
+        f"{format_sources(hits) if hits else '(none)'}\n\n"
+        "=======\n"
+        f"THEIR RECORD, {span}\n"
+        + "\n".join(f"- {e}" for e in entries)
+        + "\n"
+    )
+    if echoes:
+        body += (
+            "\nEARLIER ENTRY THAT RESEMBLES THIS WEEK\n"
+            + "\n".join(f"- {e}" for e in echoes[:2])
+            + "\n"
+        )
+    body += "\nWrite the recap of their week."
+    return [system(sys_text), user(body)]

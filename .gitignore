@@ -27,3 +27,8 @@ dist/
 # os
 .DS_Store
 .vercel
+
+# your own profile and commonplace book — nobody else's to commit.
+# Leading slash matters: unanchored, `chronicle` also matches philo/chronicle/.
+/profiles
+/chronicle

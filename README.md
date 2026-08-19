@@ -182,7 +182,12 @@ rather than leaking into the pipeline:
 | `philo serve` | Web interface at `http://localhost:8000` |
 | `philo fetch` | Download the public-domain texts into the library |
 | `philo chat` | Conversation that remembers the last few turns |
+| `philo council "question"` | Three traditions answer independently, then argue |
 | `philo daily` | Today's personalised "Daily Philosophy" |
+| `philo save N` | Keep a passage from the last answer or search |
+| `philo decide "situation"` | Log a decision; get the tests the texts supply |
+| `philo chronicle` | What you have saved, decided and asked |
+| `philo recap` | The week, stitched together from your own record |
 | `philo search "query"` | Retrieval only — see exactly what the model would be sent |
 | `philo sources` | What's in the library |
 | `philo ingest` | Chunk, embed and index `library/` |
@@ -204,6 +209,14 @@ philo ask "what is virtue?" --plain                   # everyday layer only
 philo ask "what is virtue?" --json                    # machine-readable
 philo search "wu wei" -k 10 --full                    # inspect retrieval directly
 philo daily --profile yucheng --theme "grief"
+
+philo council "is it ever right to break a promise?"  # 3 traditions, then the objection
+philo council "..." --seats 4 --no-objection          # wider room, one fewer call
+
+philo search "what is in my control" && philo save 1 2
+philo decide "should I say what I think in tomorrow's meeting?"
+philo chronicle --kind decision
+philo recap --days 14
 ```
 
 `philo search` is the debugging tool worth knowing: it shows the blended score,
@@ -227,6 +240,11 @@ offline and inside a strict content-security policy.
 
 Questions live in the URL (`/?q=why+do+we+fear+death`), so an answer is
 shareable.
+
+Five tabs: **Ask**, **Council**, **Daily**, **Chronicle**, **Library**. Council
+and Chronicle are described in their own sections below; both work the same way
+in the browser as in the terminal, except that the chronicle lives in this
+browser rather than in a file.
 
 ### Conversations and follow-ups
 
@@ -305,6 +323,99 @@ The API is a plain ASGI app (`philo.web.app:app`) and is documented at
 | `GET /api/search` | retrieval only, with scores |
 | `GET /api/sources` | what is indexed |
 | `GET /api/health` | provider, index and passage counts |
+
+## The Council
+
+```bash
+philo council "is it ever right to break a promise?"
+```
+
+One answer is one voice. That voice is grounded and cited, but it is still a
+synthesis — and synthesis is where a plurality of traditions quietly becomes a
+consensus none of them holds. Averaging Epictetus and Nietzsche does not produce
+a third philosopher.
+
+The council answers the same question **several times over, independently**. Each
+tradition retrieves under its own filter and answers from its own texts alone,
+then the best-supported position is challenged from the others':
+
+```
+◗ Stoicism            Epictetus, Marcus Aurelius       0.85 █████
+◗ Ancient Greek       Aristotle, Plato                 0.84 █████
+◗ Enlightenment Fem…  Mary Wollstonecraft              0.78 ████▋
+
+⟂ The objection   against Stoicism    raised from Ancient Greek, …
+```
+
+**Seats are earned, not assigned.** There is no hardcoded list of traditions. One
+broad survey retrieval decides which traditions actually have passages on *this*
+question — induction seats Hume and Russell, grief does not. A tradition that
+cannot clear the relevance floor does not get a chair, and a library where only
+one tradition can speak gets told so rather than shown a staged debate.
+
+**Markers are local to each position.** Every position numbers its own sources
+from `[1]`. Global numbering would look tidier and would let a marker in one
+tradition's prose point at another tradition's text.
+
+**The objection may only use the other traditions' passages.** An objection
+assembled from the text it objects to is a summary with an adversarial tone. The
+prompt also forbids the opposite failure: if the sources do not contradict the
+position, it has to say so. Manufactured disagreement is the same fault as
+manufactured consensus.
+
+Cost is one embedding plus **N+1 completions** — the positions run concurrently,
+so wall-clock is roughly one answer, but the bill is not. `--no-objection` drops
+one call; on the web, `PHILO_WEB_MAX_SEATS` caps what a single click can spend,
+and `0` disables the endpoint.
+
+Not streamed: three completions arriving interleaved is noise, and the value is
+in reading them side by side.
+
+---
+
+## The Chronicle
+
+```bash
+philo search "what is in my control" && philo save 1 2
+philo decide "should I say what I think in tomorrow's meeting?"
+philo recap
+```
+
+A cumulative record: passages you kept, decisions you actually faced, questions
+you asked. One JSONL file per profile under `chronicle/` (`philo chronicle
+--path` prints it), appended to and never rewritten — so a half-finished write
+cannot cost you the book, and the file stays greppable by the person whose
+record it is.
+
+**Decisions get the questions, not a verdict.** The prompt forbids advice
+outright. A decision journal that tells you what to do is a fortune cookie with
+citations, and it takes away the one part that is actually yours. You get what
+the texts would ask, applied to your specifics, with the tensions between them
+left in — and an honest list of what they do not settle.
+
+**The recap will say there is no thread.** If the week's entries share nothing,
+it says so. A manufactured pattern is worse than none, because you will believe
+it about yourself. No streaks, no encouragement.
+
+**Resurfacing costs nothing.** "You kept this four months ago" needs a similarity
+measure, and the obvious implementation — embed every entry on save — costs an
+API call per save plus a second index. It is unnecessary: a saved passage is
+already in the index under its chunk id, and your question was just embedded for
+retrieval anyway. The comparison is a dot product between two vectors that both
+already exist.
+
+The threshold is a comparison, not a constant: **a saved passage comes back if
+this question would have retrieved it anyway.** The weakest passage that made it
+into the answer sets the bar. An absolute cosine floor would be right for exactly
+one embedding model — the offline mock tops out near 0.3 where a real model says
+0.8 — and silently wrong after any provider change.
+
+In the browser the record lives in `localStorage` and is posted up only when you
+ask for a recap; the server stores nothing, because there are no accounts here
+and one visitor's chronicle must never reach another's. **Export** prints the
+same JSONL the CLI writes.
+
+---
 
 ## Deploying
 
@@ -512,6 +623,8 @@ Everything is environment variables, read from `.env`. See
 | `PHILO_HYBRID_ALPHA` | `0.72` | 1.0 = pure embeddings, 0.0 = pure BM25 |
 | `PHILO_MIN_SCORE` | `0.12` | Below this: "not in this library" |
 | `PHILO_CHUNK_TARGET` | `900` | Target chunk size (CJK-weighted characters) |
+| `PHILO_CHRONICLE` | `./chronicle` | Where your commonplace book lives |
+| `PHILO_WEB_MAX_SEATS` | `4` | Cap what one council click may spend; `0` disables it |
 
 Azure routes by *deployment name*, which is not the model name. That is the most
 common first-run failure, so `philo doctor` checks for it by name and the provider
@@ -574,6 +687,13 @@ pip install "philo[openai]"     # or [anthropic], [gemini], [web], [fast], [all]
 - **Grounding is enforced structurally, not perfectly.** Retrieval floor, marker
   auditing and prompt constraints make unsourced claims hard; they do not make
   them impossible. `--show-sources` is one keystroke away for a reason.
+- **The council is only as plural as the shelf.** Three traditions weighing in
+  is a fact about what got indexed, not about philosophy. Two of the fourteen
+  works are Mill's and two are Stoic, so some questions seat a narrower room
+  than the format implies — the seat scores are printed so you can see it.
+- **The chronicle is per-browser on the web.** No accounts, no sync. Clearing
+  site data clears the record; **Export** is the only backup. The CLI's copy is
+  a real file you can back up, and the two do not talk to each other.
 
 ## Licence
 

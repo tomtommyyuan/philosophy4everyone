@@ -137,7 +137,14 @@ class MockProvider:
             text = _compose_daily(question, sources, lang)
         elif not sources:
             text = _compose_refusal(question, lang)
+        elif task == "decision":
+            text = _compose_decision(_parse_fenced(prompt) or question, sources, lang)
+        elif task == "recap":
+            text = _compose_recap(_parse_record(prompt), sources, lang)
+        elif task == "objection":
+            text = _compose_objection(question, sources, lang)
         else:
+            # answer, council — both want the two-layer shape.
             text = _compose_answer(question, sources, lang)
 
         if stream_cb:
@@ -210,6 +217,21 @@ def _parse_question(prompt: str) -> str:
         if line and not line.startswith(("[", '"""', "-", "#")):
             return line
     return ""
+
+
+def _parse_fenced(prompt: str) -> str:
+    """The block a decision prompt fences off as the reader's own words."""
+    m = re.search(r'THE DECISION[^\n]*\n"""\n(.*?)\n"""', prompt, re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
+def _parse_record(prompt: str) -> list[str]:
+    """The `- [2026-02-01] decided: …` lines a recap prompt carries."""
+    return [
+        line.strip("- ").strip()
+        for line in prompt.splitlines()
+        if line.strip().startswith("- [")
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -420,3 +442,114 @@ def _fnv1a(s: str) -> int:
         h ^= byte
         h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
     return h
+
+
+def _compose_decision(situation: str, sources: list["_Source"], lang: str) -> str:
+    """Offline, a decision reading is exactly what the mock can honestly give:
+    the passages that matched, arranged as questions rather than as advice."""
+    top = sources[:3]
+    if lang == "zh":
+        lines = [
+            "## THE CHOICE",
+            f"你写下的是：「{truncate(situation, 200)}」。离线模式不作解读，"
+            "只能把检索到的原文按它们提出的问题排列出来。",
+            "",
+            "## WHAT THE TEXTS WOULD ASK",
+        ]
+        for s in top:
+            lines.append(f"- {s.philosopher}：“{truncate(_key_sentences(s, situation, 1)[0], 200)}” [{s.marker}]")
+        lines += [
+            "",
+            "## WHAT THEY DO NOT SETTLE",
+            f"以上{len(top)}段都是直接摘录，没有一句是针对你的情况写的——"
+            "把它们套到你的具体处境上，正是真实模型要做的事。",
+        ]
+        return "\n".join(lines)
+
+    lines = [
+        "## THE CHOICE",
+        f"What you wrote down: “{truncate(situation, 200)}”. Offline mode does not "
+        "interpret; it can only lay out the passages that matched, as the questions "
+        "they raise.",
+        "",
+        "## WHAT THE TEXTS WOULD ASK",
+    ]
+    for s in top:
+        lines.append(
+            f"- {s.philosopher or 'The text'}: “{truncate(_key_sentences(s, situation, 1)[0], 200)}” [{s.marker}]"
+        )
+    lines += [
+        "",
+        "## WHAT THEY DO NOT SETTLE",
+        f"All {len(top)} lines above are quoted directly; none of them was written "
+        "about your situation. Applying them to your specifics is precisely the part "
+        "a real model does.",
+    ]
+    return "\n".join(lines)
+
+
+def _compose_recap(record: list[str], sources: list["_Source"], lang: str) -> str:
+    """A recap the mock can make honestly: the record restated, no pattern claimed.
+
+    Inventing a thread is the failure the real prompt forbids, and the mock
+    has no way to find a real one — so it says so rather than guessing.
+    """
+    shown = record[:6]
+    if lang == "zh":
+        lines = ["## THE WEEK", "这一周你记下了："]
+        lines += [f"- {truncate(item, 160)}" for item in shown] or ["- （无）"]
+        lines += [
+            "",
+            "## THE THREAD",
+            "离线模式无法判断这些条目之间是否真有一条线索，所以不作声称——"
+            "编造一个模式比没有模式更糟。相关原文：",
+        ]
+        lines += [f"> {truncate(_key_sentences(s, ' '.join(shown), 1)[0], 200)} [{s.marker}]" for s in sources[:2]]
+        lines += ["", "## WHAT TO SIT WITH", "这些条目里，哪一条你其实已经决定了，只是还没承认？"]
+        return "\n".join(lines)
+
+    lines = ["## THE WEEK", "What you put down this week:"]
+    lines += [f"- {truncate(item, 160)}" for item in shown] or ["- (nothing)"]
+    lines += [
+        "",
+        "## THE THREAD",
+        "Offline mode cannot tell whether these entries share a thread, so it does "
+        "not claim one — a manufactured pattern is worse than none. The passages "
+        "behind them:",
+    ]
+    lines += [
+        f"> {truncate(_key_sentences(s, ' '.join(shown), 1)[0], 200)} [{s.marker}]"
+        for s in sources[:2]
+    ]
+    lines += [
+        "",
+        "## WHAT TO SIT WITH",
+        "Which of these had you already decided before you wrote it down?",
+    ]
+    return "\n".join(lines)
+
+
+def _compose_objection(question: str, sources: list["_Source"], lang: str) -> str:
+    top = sources[:3]
+    if lang == "zh":
+        lines = ["## THE OBJECTION", "离线模式不作论辩，只能列出其他传统在这个问题上的原文："]
+        lines += [f"- {s.philosopher}：“{truncate(_key_sentences(s, question, 1)[0], 200)}” [{s.marker}]" for s in top]
+        lines += ["", "## WHERE THIS LEAVES IT", "这些段落是否真的构成反驳，需要真实模型来判断。"]
+        return "\n".join(lines)
+
+    lines = [
+        "## THE OBJECTION",
+        "Offline mode does not argue. What it can do is put the other traditions' "
+        "passages on the table:",
+    ]
+    lines += [
+        f"- {s.philosopher or 'The text'}: “{truncate(_key_sentences(s, question, 1)[0], 200)}” [{s.marker}]"
+        for s in top
+    ]
+    lines += [
+        "",
+        "## WHERE THIS LEAVES IT",
+        "Whether these passages actually contradict the position is the judgement a "
+        "real model makes; the mock only shows what would be judged.",
+    ]
+    return "\n".join(lines)
