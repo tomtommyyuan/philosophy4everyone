@@ -25,7 +25,7 @@ from ..generation.prompts import (
 from ..models import ScoredChunk
 from ..store.vector_store import Filters
 from ..util import detect_language, truncate
-from .resurface import Echo, rhymes
+from .resurface import Echo, floor_from, rhymes
 from .store import Chronicle, Entry
 
 RECAP_DAYS = 7
@@ -141,7 +141,10 @@ def log_decision(
     )
     query_vec = engine.provider.embed_query(query)
     result = engine.retriever.search(query, k=k, filters=Filters(), query_vec=query_vec)
-    echoes = rhymes(book, query, store=engine.store, query_vec=query_vec, today=today)
+    echoes = rhymes(
+        book, query, store=engine.store, query_vec=query_vec, today=today,
+        vector_floor=floor_from(result, settings=engine.settings),
+    )
 
     entry = Entry(kind="decision", text=situation.strip(), note=note.strip())
 
@@ -256,6 +259,7 @@ def weekly_recap(
     echoes = rhymes(
         older, written, store=engine.store, query_vec=query_vec,
         today=today, min_age_days=ECHO_MIN_AGE, limit=1,
+        vector_floor=floor_from(retrieved, settings=engine.settings),
     )
 
     if not hits:

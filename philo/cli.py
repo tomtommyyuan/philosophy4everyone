@@ -25,6 +25,9 @@ from .config import USER_HOME, ConfigError, Settings, get_settings
 from .corpus.gutenberg import SOURCES, fetch_all, select
 from .corpus.ingest import ingest, preview_chunks
 from .corpus.loader import CorpusError
+from .chronicle import Chronicle, Entry, log_decision, rhymes, weekly_recap
+from .chronicle.resurface import floor_from
+from .chronicle.store import last_look, remember_look
 from .generation.answerer import AskOptions, Conversation, Engine
 from .generation.council import DEFAULT_SEATS, MIN_SEATS, hold_council
 from .models import Answer
@@ -40,9 +43,13 @@ from .ui import (
     answer_footer,
     answer_view,
     banner,
+    chronicle_table,
     council_footer,
     council_view,
     daily_card,
+    decision_view,
+    echo_line,
+    recap_view,
     doctor_view,
     error_panel,
     help_view,
@@ -69,6 +76,10 @@ COMMANDS = [
     ("chat", "", "a conversation that remembers the last few turns"),
     ("council", '"question"', "3 traditions answer independently, then argue"),
     ("daily", "", "today's personalised Daily Philosophy"),
+    ("save", "N [--note …]", "keep a passage from the last answer or search"),
+    ("decide", '"situation"', "log a decision; get the tests the texts supply"),
+    ("chronicle", "[--kind K]", "what you have saved, decided and asked"),
+    ("recap", "[--days 7]", "the week, stitched together from your own record"),
     ("search", '"query"', "retrieval only — see what would be sent to the model"),
     ("sources", "", "what is in the library"),
     ("profile", "show|list|set", "who the daily piece is written for"),
@@ -171,6 +182,45 @@ def build_parser() -> argparse.ArgumentParser:
     p_daily.add_argument("--no-stream", action="store_true")
     p_daily.add_argument("--json", action="store_true")
 
+    # save
+    p_save = sub.add_parser("save", help="keep a passage from the last look")
+    p_save.add_argument("markers", nargs="*", type=int, help="which [n] to keep (default: all)")
+    p_save.add_argument("--note", default="", help="your own words about it")
+    p_save.add_argument("--profile", default=DEFAULT_PROFILE_NAME)
+
+    # decide
+    p_decide = sub.add_parser("decide", help="log a decision you are actually facing")
+    p_decide.add_argument("situation", nargs="+")
+    p_decide.add_argument("--note", default="", help="anything else that matters")
+    p_decide.add_argument("-k", type=int, default=6)
+    p_decide.add_argument("--model", default="", help="chat model for this run")
+    p_decide.add_argument("--chat-provider", default="", help="openai | azure | anthropic | gemini")
+    p_decide.add_argument("--profile", default=DEFAULT_PROFILE_NAME)
+    p_decide.add_argument("--lang", default="", choices=["", "en", "zh"])
+    p_decide.add_argument("--show-sources", "-s", action="store_true")
+    p_decide.add_argument("--no-save", action="store_true", help="do not record it")
+    p_decide.add_argument("--json", action="store_true")
+
+    # chronicle
+    p_chron = sub.add_parser("chronicle", help="the record so far")
+    p_chron.add_argument("--kind", default="", choices=["", "passage", "decision", "question"])
+    p_chron.add_argument("--limit", type=int, default=20)
+    p_chron.add_argument("--profile", default=DEFAULT_PROFILE_NAME)
+    p_chron.add_argument("--path", action="store_true", help="print the file and stop")
+    p_chron.add_argument("--forget", default="", metavar="ID", help="delete one entry")
+    p_chron.add_argument("--json", action="store_true")
+
+    # recap
+    p_recap = sub.add_parser("recap", help="the week, from your own record")
+    p_recap.add_argument("--days", type=int, default=7)
+    p_recap.add_argument("--date", default="", help="pretend today is this date (YYYY-MM-DD)")
+    p_recap.add_argument("-k", type=int, default=6)
+    p_recap.add_argument("--model", default="", help="chat model for this run")
+    p_recap.add_argument("--chat-provider", default="", help="openai | azure | anthropic | gemini")
+    p_recap.add_argument("--profile", default=DEFAULT_PROFILE_NAME)
+    p_recap.add_argument("--lang", default="", choices=["", "en", "zh"])
+    p_recap.add_argument("--json", action="store_true")
+
     # search
     p_search = sub.add_parser("search", help="retrieval only")
     p_search.add_argument("query", nargs="+")
@@ -256,6 +306,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "chat": cmd_chat,
         "council": cmd_council,
         "daily": cmd_daily,
+        "save": cmd_save,
+        "decide": cmd_decide,
+        "chronicle": cmd_chronicle,
+        "recap": cmd_recap,
         "search": cmd_search,
         "sources": cmd_sources,
         "profile": cmd_profile,
@@ -662,7 +716,8 @@ def cmd_ask(args: argparse.Namespace, settings: Settings, console: Console) -> i
         console.print(Padding(Text(question, style="question"), (1, 2, 1, 2)))
 
     stream = settings.stream and not args.no_stream and not args.json
-    answer = _run_ask(engine, question, options, console, stream=stream, lang=lang)
+    answer, result = _run_ask(engine, question, options, console, stream=stream, lang=lang)
+    _remember(settings, engine, question, answer, result)
 
     if args.json:
         print(json.dumps(answer.to_dict(), ensure_ascii=False, indent=2))
@@ -672,9 +727,39 @@ def cmd_ask(args: argparse.Namespace, settings: Settings, console: Console) -> i
                               show_academic=not args.plain))
     console.print()
     console.print(answer_footer(answer, offline=settings.is_offline))
+    for echo in _echoes(settings, engine, question, result, args.profile):
+        console.print(echo_line(echo, lang=lang, width=console.width))
     _warn_invented(console, answer)
     _warn_cross_language(console, settings, question, answer)
     return EXIT_OK
+
+
+def _remember(settings: Settings, engine: Engine, question: str, answer: Answer, result: Any) -> None:
+    """Bookmark the passages just shown, so `philo save 2` has a 2."""
+    hits = answer.sources or (result.hits if result else [])
+    if hits:
+        remember_look(settings.chronicle_dir, question, _look_hits(hits))
+
+
+def _echoes(settings: Settings, engine: Engine, question: str, result: Any, profile: str) -> list[Any]:
+    """What in the reader's record rhymes with this question.
+
+    Free: the question's embedding came back with the retrieval, and a saved
+    passage's vector is already in the index. Errors are swallowed — a
+    resurfaced aside is never worth failing an answer over.
+    """
+    try:
+        book = _book(settings, profile)
+        if not len(book):
+            return []
+        return rhymes(
+            book, question,
+            store=engine.store,
+            query_vec=result.query_vec if result else None,
+            vector_floor=floor_from(result, settings=settings),
+        )
+    except (OSError, ValueError):
+        return []
 
 
 def _run_ask(
@@ -686,14 +771,17 @@ def _run_ask(
     stream: bool,
     lang: str,
     history: Sequence[Any] = (),
-) -> Answer:
+) -> tuple[Answer, Any]:
+    """Returns the retrieval alongside the answer.
+
+    The Chronicle needs both: the hits so `philo save 2` knows what 2 meant,
+    and the query vector so resurfacing costs nothing extra.
+    """
     if stream:
         with StreamView(console, title="reading the sources", subtitle=engine.provider.chat_model) as view:
-            answer, _ = engine.ask(question, options, history=history, stream_cb=view.feed)
-        return answer
+            return engine.ask(question, options, history=history, stream_cb=view.feed)
     with Spinner(console, "retrieving and generating"):
-        answer, _ = engine.ask(question, options, history=history)
-    return answer
+        return engine.ask(question, options, history=history)
 
 
 def _warn_cross_language(console: Console, settings: Settings, question: str, answer: Answer) -> None:
@@ -815,11 +903,12 @@ def cmd_chat(args: argparse.Namespace, settings: Settings, console: Console) -> 
             chat_provider=args.chat_provider,
         )
         console.print()
-        answer = _run_ask(
+        answer, result = _run_ask(
             engine, line, options, console,
             stream=settings.stream, lang=lang,
             history=conversation.as_messages(),
         )
+        _remember(settings, engine, line, answer, result)
         conversation.add(line, answer)
         last = answer
 
@@ -974,6 +1063,225 @@ def cmd_daily(args: argparse.Namespace, settings: Settings, console: Console) ->
 
 
 # --------------------------------------------------------------------------
+# the chronicle
+# --------------------------------------------------------------------------
+
+
+def _book(settings: Settings, name: str) -> Chronicle:
+    return Chronicle.for_profile(settings.chronicle_dir, name or DEFAULT_PROFILE_NAME)
+
+
+def _look_hits(answer_or_result: Any) -> list[dict[str, str]]:
+    """Flatten retrieved passages into what `philo save` needs later."""
+    return [
+        {
+            "marker": str(h.marker),
+            "chunk_id": h.chunk.id,
+            "text": h.chunk.text,
+            "philosopher": h.chunk.philosopher,
+            "work_title": h.chunk.work_title,
+            "section": h.chunk.section,
+            "tradition": h.chunk.tradition,
+        }
+        for h in answer_or_result
+    ]
+
+
+def cmd_save(args: argparse.Namespace, settings: Settings, console: Console) -> int:
+    look = last_look(settings.chronicle_dir)
+    hits = look.get("hits") or []
+    if not hits:
+        console.print(
+            error_panel(
+                "save",
+                "There is nothing to save — no passage has been retrieved yet in this library.",
+                hint_text="Run `philo ask …` or `philo search …` first, then `philo save 2`.",
+            )
+        )
+        return EXIT_USAGE
+
+    wanted = set(args.markers) if args.markers else {int(h["marker"]) for h in hits}
+    chosen = [h for h in hits if int(h["marker"]) in wanted]
+    missing = wanted - {int(h["marker"]) for h in hits}
+    if not chosen:
+        console.print(
+            error_panel(
+                "save",
+                f"The last look had markers {sorted(int(h['marker']) for h in hits)}; "
+                f"nothing matches {sorted(wanted)}.",
+            )
+        )
+        return EXIT_USAGE
+
+    book = _book(settings, args.profile)
+    kept, already = [], 0
+    for hit in chosen:
+        if book.has_chunk(hit["chunk_id"]):
+            already += 1
+            continue
+        kept.append(
+            book.add(
+                Entry(
+                    kind="passage",
+                    text=hit["text"],
+                    note=args.note,
+                    chunk_id=hit["chunk_id"],
+                    philosopher=hit["philosopher"],
+                    work_title=hit["work_title"],
+                    section=hit["section"],
+                    tradition=hit["tradition"],
+                )
+            )
+        )
+
+    console.print()
+    if kept:
+        console.print(chronicle_table(kept))
+    console.print()
+    bits = [("kept", str(len(kept)))]
+    if already:
+        bits.append(("already there", str(already)))
+    if missing:
+        bits.append(("no such marker", ", ".join(map(str, sorted(missing)))))
+    bits.append(("total", str(len(book))))
+    console.print(status_bar(bits))
+    return EXIT_OK
+
+
+def cmd_decide(args: argparse.Namespace, settings: Settings, console: Console) -> int:
+    situation = " ".join(args.situation).strip()
+    if not situation:
+        console.print(error_panel("decide", "No situation given."))
+        return EXIT_USAGE
+
+    profile = _load_profile(settings, args.profile)
+    lang = args.lang or (profile.language if profile else "") or detect_language(situation)
+    engine = _engine(settings)
+    book = _book(settings, args.profile)
+
+    if not args.json:
+        _header(console, settings)
+        console.print(rule(L("question", lang)))
+        console.print(Padding(Text(situation, style="question"), (1, 2, 1, 2)))
+
+    with Spinner(console, "reading the texts against your situation"):
+        result = log_decision(
+            engine, book, situation,
+            note=args.note, lang=lang, k=args.k,
+            reader_note=profile.reader_note() if profile else "",
+            chat_model=args.model, chat_provider=args.chat_provider,
+            save=not args.no_save,
+        )
+
+    if args.json:
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        return EXIT_OK if result.grounded else EXIT_ERROR
+
+    if not result.grounded:
+        console.print(error_panel("decide", result.choice))
+        return EXIT_ERROR
+
+    console.print(decision_view(result, lang=lang, show_sources=args.show_sources))
+    for echo in result.echoes:
+        console.print(echo_line(echo, lang=lang, width=console.width))
+    console.print()
+    console.print(
+        status_bar([
+            ("model", result.model or "—"),
+            ("sources", str(len(result.sources))),
+            ("took", human_ms(result.took_ms)),
+            ("entry", result.entry.id if not args.no_save else "not recorded"),
+        ])
+    )
+    return EXIT_OK
+
+
+def cmd_chronicle(args: argparse.Namespace, settings: Settings, console: Console) -> int:
+    book = _book(settings, args.profile)
+
+    if args.path:
+        print(book.path)
+        return EXIT_OK
+
+    if args.forget:
+        if book.remove(args.forget):
+            console.print(hint(f"forgot {args.forget}"))
+            return EXIT_OK
+        console.print(error_panel("chronicle", f"No entry with id {args.forget!r}."))
+        return EXIT_USAGE
+
+    entries = book.newest_first()
+    if args.kind:
+        entries = [e for e in entries if e.kind == args.kind]
+    entries = entries[: max(1, args.limit)]
+
+    if args.json:
+        print(json.dumps([e.to_dict() for e in entries], ensure_ascii=False, indent=2))
+        return EXIT_OK
+
+    counts = book.counts()
+    console.print()
+    console.print(rule(f"{L('chronicle', 'en')}  ·  {len(book)}"))
+    console.print()
+    console.print(chronicle_table(entries))
+    console.print()
+    console.print(
+        status_bar([
+            ("saved", str(counts.get("passage", 0))),
+            ("decided", str(counts.get("decision", 0))),
+            ("asked", str(counts.get("question", 0))),
+            ("days", str(book.days_active())),
+            ("file", str(book.path)),
+        ])
+    )
+    return EXIT_OK
+
+
+def cmd_recap(args: argparse.Namespace, settings: Settings, console: Console) -> int:
+    profile = _load_profile(settings, args.profile)
+    engine = _engine(settings)
+    book = _book(settings, args.profile)
+
+    with Spinner(console, "reading your week back"):
+        recap = weekly_recap(
+            engine, book,
+            days=max(1, args.days), lang=args.lang or (profile.language if profile else ""),
+            reader_note=profile.reader_note() if profile else "",
+            chat_model=args.model, chat_provider=args.chat_provider,
+            today=args.date, k=args.k,
+        )
+
+    if args.json:
+        print(json.dumps(recap.to_dict(), ensure_ascii=False, indent=2))
+        return EXIT_OK if recap.grounded else EXIT_ERROR
+
+    if recap.empty:
+        console.print(
+            error_panel(
+                "recap",
+                f"Nothing recorded in the last {args.days} days, so there is no week to read back.",
+                hint_text="`philo save 2` after an answer, or `philo decide \"…\"` when something real comes up.",
+            )
+        )
+        return EXIT_ERROR
+
+    lang = args.lang or (profile.language if profile else "") or "en"
+    _header(console, settings)
+    console.print(rule(f"{L('week', lang)}  ·  {recap.span}"))
+    console.print()
+    console.print(recap_view(recap, lang=lang, width=console.width))
+    console.print()
+    console.print(
+        status_bar([
+            ("entries", str(len(recap.entries))),
+            ("model", recap.model or "—"),
+            ("took", human_ms(recap.took_ms)),
+        ])
+    )
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------
 # search
 # --------------------------------------------------------------------------
 
@@ -982,6 +1290,8 @@ def cmd_search(args: argparse.Namespace, settings: Settings, console: Console) -
     query = " ".join(args.query).strip()
     engine = _engine(settings)
     result = engine.search(query, AskOptions(k=args.k, filters=_filters(args)))
+    if result.hits:
+        remember_look(settings.chronicle_dir, query, _look_hits(result.hits))
 
     if args.json:
         print(json.dumps(
@@ -1024,6 +1334,7 @@ def cmd_search(args: argparse.Namespace, settings: Settings, console: Console) -
             ]
         )
     )
+    console.print(hint("`philo save 1 2` keeps a passage in your chronicle"))
     return EXIT_OK
 
 

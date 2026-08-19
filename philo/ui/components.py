@@ -21,7 +21,7 @@ from rich.table import Table
 from rich.text import Text
 
 from ..models import Answer, DailyPiece, ScoredChunk
-from ..util import human_ms, snippet, truncate
+from ..util import char_weight, human_ms, snippet, truncate
 from .theme import (
     AMBER,
     PANEL_BOX,
@@ -59,6 +59,17 @@ LABELS: dict[str, tuple[str, str]] = {
     "against": ("against", "针对"),
     "raised_by": ("raised from", "依据"),
     "silent": ("could not speak", "未能发言"),
+    "chronicle": ("The chronicle", "记事"),
+    "choice": ("What you are choosing", "你在选的是什么"),
+    "tests": ("What the texts would ask", "文本会问你什么"),
+    "limits": ("What they do not settle", "它们解决不了的"),
+    "week": ("The week", "这一周"),
+    "thread": ("The thread", "线索"),
+    "sit": ("What to sit with", "留给下周"),
+    "saved": ("saved", "摘录"),
+    "decided": ("decided", "决定"),
+    "asked": ("asked", "提问"),
+    "echo": ("you kept this", "你之前存过"),
     "tradition": ("Tradition", "传统"),
     "rights": ("Rights", "版权"),
     "chunks": ("Passages", "段落数"),
@@ -609,3 +620,145 @@ def council_footer(council: Any, *, lang: str = "en") -> Text:
     if council.objection is None and council.held:
         bits.append(("objection", "not raised"))
     return status_bar(bits)
+
+
+# --------------------------------------------------------------------------
+# The Chronicle
+# --------------------------------------------------------------------------
+
+
+_KIND_GLYPH = {"passage": "❝", "decision": "◆", "question": "?"}
+
+
+def chronicle_table(entries: Sequence[Any], *, lang: str = "en") -> RenderableType:
+    """The record as a list, newest first.
+
+    The id column looks like clutter until you want to delete something. It
+    is the only handle on an entry, and printing it beside every row is
+    cheaper than a second command to look one up.
+    """
+    if not entries:
+        return Text("  nothing recorded yet", style="dim")
+
+    table = Table(
+        box=TABLE_BOX, border_style="frame.soft", header_style="muted",
+        expand=True, pad_edge=False, show_edge=False,
+    )
+    table.add_column("", width=1, no_wrap=True)
+    table.add_column("date", style="dim", width=10, no_wrap=True)
+    table.add_column("kind", style="muted", width=8, no_wrap=True)
+    table.add_column(L("passages", lang), overflow="ellipsis")
+    table.add_column("id", style="dim", width=11, no_wrap=True)
+
+    for entry in entries:
+        glyph = Text(_KIND_GLYPH.get(entry.kind, "·"), style="cite")
+        body = Text(entry.headline(96), style="quote" if entry.kind == "passage" else "")
+        table.add_row(
+            glyph,
+            Text(entry.day),
+            Text(L(_KIND_LABEL.get(entry.kind, entry.kind), lang)),
+            body,
+            Text(entry.id),
+        )
+    return table
+
+
+_KIND_LABEL = {"passage": "saved", "decision": "decided", "question": "asked"}
+
+
+def echo_line(echo: Any, *, lang: str = "en", width: int = 80) -> Text:
+    """`↺ you kept this 3 months ago — “Men are disturbed not by…”  Mill · …`
+
+    Deliberately one line and never a panel. A resurfaced entry is an aside;
+    given a box of its own it would compete with the answer the reader
+    actually asked for — and an aside that wraps onto three lines has stopped
+    being an aside, so the quote is trimmed to whatever the line has left
+    rather than trusting the terminal to do something sensible.
+    """
+    when = f"{L('echo', lang)} {echo.when}"
+    # Philosopher and work only. The section trail is what pushes this over,
+    # and the entry itself is one `philo chronicle` away.
+    where = " · ".join(b for b in (echo.entry.philosopher, echo.entry.work_title) if b)
+
+    MIN_QUOTE = 20
+    fixed = char_weight("  ↺ ") + char_weight(when) + char_weight(" — ")
+    # On a narrow terminal something has to go, and the citation goes first:
+    # the quote is what makes the reader recognise the entry, and
+    # `philo chronicle` is one command away for the rest.
+    if width - fixed - char_weight(where) - 2 < MIN_QUOTE:
+        where = ""
+    spent = fixed + (char_weight(where) + 2 if where else 0)
+    body = truncate(echo.entry.headline(200), max(MIN_QUOTE, width - spent))
+
+    out = Text("  ↺ ", style="cite")
+    out.append(when, style="muted")
+    out.append(" — ", style="dim")
+    out.append(body, style="quote")
+    if where:
+        out.append(f"  {where}", style="source.meta")
+    return out
+
+
+def decision_view(result: Any, *, lang: str = "en", show_sources: bool = False) -> RenderableType:
+    parts: list[RenderableType] = []
+    for key, text, border in (
+        ("choice", result.choice, "frame"),
+        ("tests", result.tests, "frame"),
+        ("limits", result.limits, "frame.soft"),
+    ):
+        if not (text or "").strip():
+            continue
+        parts.append(
+            Panel(
+                Padding(prose(text), (1, 2)),
+                title=_panel_title("◗", L(key, lang),
+                                   glyph_style=f"bold {VIOLET}", label_style="heading"),
+                title_align="left",
+                border_style=border,
+                box=PANEL_BOX,
+                padding=0,
+            )
+        )
+        parts.append(Text(""))
+
+    if result.sources:
+        parts.append(rule(f"{L('sources', lang)}  ·  {len(result.sources)}"))
+        parts.append(Text(""))
+        parts.append(sources_table(result.sources, lang=lang))
+        if show_sources:
+            parts.append(Text(""))
+            parts.append(source_cards(result.sources, lang=lang))
+    return Group(*parts) if parts else Text("—", style="dim")
+
+
+def recap_view(recap: Any, *, lang: str = "en", width: int = 80) -> RenderableType:
+    parts: list[RenderableType] = []
+    for key, text, style in (
+        ("week", recap.week, "frame"),
+        ("thread", recap.thread, "frame"),
+        ("sit", recap.sit_with, "frame.soft"),
+    ):
+        if not (text or "").strip():
+            continue
+        parts.append(
+            Panel(
+                Padding(prose(text), (1, 2)),
+                title=_panel_title("◗", L(key, lang),
+                                   glyph_style=f"bold {VIOLET}", label_style="heading"),
+                title_align="left",
+                border_style=style,
+                box=PANEL_BOX,
+                padding=0,
+            )
+        )
+        parts.append(Text(""))
+
+    for echo in recap.echoes:
+        parts.append(echo_line(echo, lang=lang, width=width))
+        parts.append(Text(""))
+
+    if recap.sources:
+        parts.append(rule(f"{L('sources', lang)}  ·  {len(recap.sources)}"))
+        parts.append(Text(""))
+        parts.append(sources_table(recap.sources, lang=lang))
+    return Group(*parts) if parts else Text("—", style="dim")

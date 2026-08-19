@@ -169,8 +169,8 @@ def run(argv, capsys):
 def test_cli_help_lists_every_command(capsys):
     code, out = run(["--help"], capsys)
     assert code == 0
-    for command in ("ingest", "ask", "chat", "council", "daily", "search", "sources",
-                    "profile", "doctor"):
+    for command in ("ingest", "ask", "chat", "council", "daily", "save", "decide",
+                    "chronicle", "recap", "search", "sources", "profile", "doctor"):
         assert command in out
 
 
@@ -228,6 +228,82 @@ def test_cli_council_declines_rather_than_staging_a_debate(cwd, capsys, monkeypa
     assert code == 1
     assert "Traceback" not in out
     assert "relevance floor" in out
+
+
+# --------------------------------------------------------------------------
+# The chronicle, end to end
+# --------------------------------------------------------------------------
+
+
+def test_cli_save_needs_something_to_have_been_retrieved_first(cwd, capsys):
+    code, out = run(["save", "1"], capsys)
+    assert code == 2
+    assert "philo search" in out
+
+
+def test_cli_search_then_save_then_chronicle(cwd, capsys):
+    assert run(["search", "control", "-k", "3"], capsys)[0] == 0
+    code, out = run(["save", "1", "--note", "worth returning to"], capsys)
+    assert code == 0
+    assert "kept 1" in out
+
+    rows = json.loads(run(["chronicle", "--json"], capsys)[1])
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "passage"
+    assert rows[0]["note"] == "worth returning to"
+    assert rows[0]["chunk_id"]
+
+
+def test_cli_save_does_not_keep_the_same_passage_twice(cwd, capsys):
+    run(["search", "control", "-k", "3"], capsys)
+    run(["save", "1"], capsys)
+    code, out = run(["save", "1"], capsys)
+    assert code == 0
+    assert "already there" in out
+    assert len(json.loads(run(["chronicle", "--json"], capsys)[1])) == 1
+
+
+def test_cli_save_reports_a_marker_that_was_never_offered(cwd, capsys):
+    run(["search", "control", "-k", "2"], capsys)
+    code, out = run(["save", "9"], capsys)
+    assert code == 2
+    assert "nothing matches" in out
+
+
+def test_cli_decide_records_and_can_be_forgotten(cwd, capsys):
+    code, out = run(["decide", "someone disturbed me; is my reaction in my control?",
+                     "--json"], capsys)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["sources"]
+    entry_id = payload["id"]
+
+    assert run(["chronicle", "--forget", entry_id], capsys)[0] == 0
+    assert json.loads(run(["chronicle", "--json"], capsys)[1]) == []
+
+
+def test_cli_recap_says_so_rather_than_inventing_a_week(cwd, capsys):
+    code, out = run(["recap"], capsys)
+    assert code == 1
+    assert "Nothing recorded" in out
+    assert "Traceback" not in out
+
+
+def test_cli_recap_reads_back_what_was_recorded(cwd, capsys):
+    run(["search", "control", "-k", "3"], capsys)
+    run(["save", "1"], capsys)
+    code, out = run(["recap", "--json"], capsys)
+    assert code == 0
+    recap = json.loads(out)
+    assert recap["n_entries"] == 1
+    # The reader's own save is source [1], ahead of anything freshly retrieved.
+    assert recap["sources"][0]["marker"] == 1
+
+
+def test_cli_chronicle_prints_where_the_file_lives(cwd, capsys):
+    code, out = run(["chronicle", "--path"], capsys)
+    assert code == 0
+    assert out.strip().endswith("default.jsonl")
 
 
 def test_cli_reports_a_missing_index_without_a_traceback(tmp_path: Path, monkeypatch, capsys):

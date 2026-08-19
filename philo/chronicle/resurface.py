@@ -23,6 +23,14 @@ own floor.
 Recency is disqualifying, not helpful. Something saved an hour ago is not an
 echo, it is the session you are in — so an entry has to be old enough to have
 been forgotten before it can be brought back.
+
+The vector threshold is best set by `floor_from()`, not by the constant
+below. Cosine ranges are a property of the embedding model — the offline
+mock's hashed vectors top out around 0.3 for near-verbatim text where a real
+embedding model would say 0.8 — so any absolute number is right for one
+provider and wrong for the next. What is portable is a *comparison*: a saved
+passage comes back if this question would have retrieved it anyway. That
+needs no tuning and means something the reader can be told in one sentence.
 """
 
 from __future__ import annotations
@@ -34,9 +42,8 @@ from typing import Sequence
 from ..util import dot, tokenize
 from .store import Chronicle, Entry
 
-# Cosine between a saved passage and the current question. Deliberately
-# stricter than the retriever's floor: retrieval is looking for the best of
-# what exists, this is deciding whether to interrupt with something old.
+# Fallback for callers with no retrieval to hand — see `floor_from()`, which
+# is what the CLI and the web actually use.
 VECTOR_FLOOR = 0.38
 
 # Share of the current question's meaningful words that appear in the entry.
@@ -45,6 +52,21 @@ MIN_SHARED_WORDS = 2
 
 # An entry younger than this is the conversation you are having, not an echo.
 MIN_AGE_DAYS = 2
+
+
+def floor_from(result, *, settings=None) -> float:
+    """The bar a saved passage must clear: would this question have found it?
+
+    The weakest passage that actually made it into the answer sets the bar.
+    Anything scoring at least that much would have earned a place in the
+    sources, so bringing it back is not a second, looser notion of relevance
+    bolted on beside the retriever's — it is the retriever's own.
+    """
+    floor = getattr(settings, "min_score", 0.0) if settings is not None else 0.0
+    hits = getattr(result, "hits", None) or []
+    if hits:
+        return max(floor, min(h.dense for h in hits))
+    return max(floor, VECTOR_FLOOR) if floor else VECTOR_FLOOR
 
 
 @dataclass

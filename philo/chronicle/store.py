@@ -196,3 +196,37 @@ class Chronicle:
 
     def days_active(self) -> int:
         return len({e.day for e in self.entries if e.day})
+
+
+# --------------------------------------------------------------------------
+# The last look
+# --------------------------------------------------------------------------
+
+LAST_LOOK = "last-look.json"
+
+
+def remember_look(directory: Path, question: str, hits: Sequence[dict[str, str]]) -> None:
+    """Record what was just retrieved, so `philo save 2` knows what 2 means.
+
+    Written best-effort: failing to save a bookmark must never turn a
+    perfectly good answer into an error on the way out.
+    """
+    directory = Path(directory)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / LAST_LOOK).write_text(
+            json.dumps(
+                {"question": question, "at": now_iso(), "hits": list(hits)},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def last_look(directory: Path) -> dict[str, Any]:
+    try:
+        return json.loads((Path(directory) / LAST_LOOK).read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}

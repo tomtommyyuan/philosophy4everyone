@@ -41,6 +41,10 @@ class RetrievalResult:
     filters: Filters | None = None
     took_ms: int = 0
     best_score: float = 0.0
+    # The embedding this search ran on. Carried so a caller that wants to
+    # compare something else against the same question — the Chronicle
+    # deciding what rhymes — does not have to pay for it twice.
+    query_vec: Sequence[float] | None = None
 
     @property
     def grounded(self) -> bool:
@@ -197,6 +201,7 @@ class Retriever:
             filters=filters,
             best_score=best_dense,
             took_ms=int((time.perf_counter() - started) * 1000),
+            query_vec=query_vec,
         )
 
     # ------------------------------------------------------------------
