@@ -169,7 +169,7 @@ def run(argv, capsys):
 def test_cli_help_lists_every_command(capsys):
     code, out = run(["--help"], capsys)
     assert code == 0
-    for command in ("ingest", "ask", "chat", "council", "daily", "save", "decide",
+    for command in ("ingest", "ask", "chat", "council", "mood", "daily", "save", "decide",
                     "chronicle", "recap", "search", "sources", "profile", "doctor"):
         assert command in out
 
@@ -228,6 +228,39 @@ def test_cli_council_declines_rather_than_staging_a_debate(cwd, capsys, monkeypa
     assert code == 1
     assert "Traceback" not in out
     assert "relevance floor" in out
+
+
+def test_cli_mood_lists_the_cards_when_given_nothing(cwd, capsys):
+    code, out = run(["mood", "--list"], capsys)
+    assert code == 0
+    assert "Worried" in out and "焦虑" in out
+
+
+def test_cli_bare_mood_shows_the_picker_and_asks_for_one(cwd, capsys):
+    """A tap with no mood chosen is a usage error, not an empty reading."""
+    code, out = run(["mood"], capsys)
+    assert code == 2
+    assert "Angry" in out
+
+
+def test_cli_mood_json(cwd, capsys):
+    code, out = run(
+        ["mood", "worried", "--why",
+         "someone disturbed me and I lost my opinion of what is in my control",
+         "--json"],
+        capsys,
+    )
+    assert code == 0
+    reading = json.loads(out)
+    assert reading["mood"] == "worried"
+    assert reading["sources"]
+
+
+def test_cli_unknown_mood_names_the_real_ones(cwd, capsys):
+    code, out = run(["mood", "hangry"], capsys)
+    assert code == 2
+    assert "philo mood --list" in out
+    assert "Traceback" not in out
 
 
 # --------------------------------------------------------------------------

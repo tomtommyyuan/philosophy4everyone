@@ -70,6 +70,10 @@ LABELS: dict[str, tuple[str, str]] = {
     "decided": ("decided", "决定"),
     "asked": ("asked", "提问"),
     "echo": ("you kept this", "你之前存过"),
+    "feeling": ("What is happening", "这是怎么回事"),
+    "schools": ("What the schools say", "各家会说什么"),
+    "one_thing": ("One thing to try", "试一件小事"),
+    "mood": ("Today", "今天"),
     "tradition": ("Tradition", "传统"),
     "rights": ("Rights", "版权"),
     "chunks": ("Passages", "段落数"),
@@ -762,3 +766,58 @@ def recap_view(recap: Any, *, lang: str = "en", width: int = 80) -> RenderableTy
         parts.append(Text(""))
         parts.append(sources_table(recap.sources, lang=lang))
     return Group(*parts) if parts else Text("—", style="dim")
+
+
+def mood_view(reading: Any, *, lang: str = "en", show_sources: bool = False) -> RenderableType:
+    """Three panels, then the sources. The middle one carries the disagreement."""
+    parts: list[RenderableType] = []
+    for key, body, border in (
+        ("feeling", reading.feeling, "frame"),
+        ("schools", reading.schools, "frame"),
+        ("one_thing", reading.practice, "ok"),
+    ):
+        if not (body or "").strip():
+            continue
+        parts.append(
+            Panel(
+                Padding(prose(body), (1, 2)),
+                title=_panel_title("◗", L(key, lang),
+                                   glyph_style=f"bold {VIOLET}", label_style="heading"),
+                title_align="left",
+                border_style=border,
+                box=PANEL_BOX,
+                padding=0,
+            )
+        )
+        parts.append(Text(""))
+
+    if reading.sources:
+        parts.append(rule(f"{L('sources', lang)}  ·  {len(reading.sources)}"))
+        parts.append(Text(""))
+        parts.append(sources_table(reading.sources, lang=lang))
+        if show_sources:
+            parts.append(Text(""))
+            parts.append(source_cards(reading.sources, lang=lang))
+    return Group(*parts) if parts else Text("—", style="dim")
+
+
+def mood_cards(moods: Sequence[Any], *, lang: str = "en", columns: int = 4) -> RenderableType:
+    """The picker, in both languages.
+
+    A grid rather than a wrapped line: `Text` wrapping puts a break wherever
+    it runs out of room, which lands mid-card and makes ten short labels look
+    like prose. No separate key column — the key *is* the lowercase English
+    label, so printing both would be printing the same word twice.
+    """
+    table = Table.grid(padding=(0, 3))
+    for _ in range(columns):
+        table.add_column(no_wrap=True)
+
+    cells = [
+        Text.assemble((m.en, "heading"), ("  ", ""), (m.zh, "muted"))
+        for m in moods
+    ]
+    for i in range(0, len(cells), columns):
+        row = cells[i:i + columns]
+        table.add_row(*(row + [Text("")] * (columns - len(row))))
+    return Padding(table, (0, 0, 0, 2))

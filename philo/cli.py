@@ -30,6 +30,7 @@ from .chronicle.resurface import floor_from
 from .chronicle.store import last_look, remember_look
 from .generation.answerer import AskOptions, Conversation, Engine
 from .generation.council import DEFAULT_SEATS, MIN_SEATS, hold_council
+from .generation.mood import MOODS, read_mood
 from .models import Answer
 from .personalize.daily import generate_daily
 from .personalize.profile import DEFAULT_PROFILE_NAME, LEVELS, Profile, list_profiles
@@ -55,6 +56,8 @@ from .ui import (
     help_view,
     ingest_summary,
     library_table,
+    mood_cards,
+    mood_view,
     make_console,
     make_ingest_progress,
     retrieval_table,
@@ -75,6 +78,7 @@ COMMANDS = [
     ("ask", '"question"', "answer from the texts, with sources"),
     ("chat", "", "a conversation that remembers the last few turns"),
     ("council", '"question"', "3 traditions answer independently, then argue"),
+    ("mood", "[angry|worried|…]", "how are you feeling? several schools answer"),
     ("daily", "", "today's personalised Daily Philosophy"),
     ("save", "N [--note …]", "keep a passage from the last answer or search"),
     ("decide", '"situation"', "log a decision; get the tests the texts supply"),
@@ -168,6 +172,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_council.add_argument("--profile", default="", help="write for this reader")
     p_council.add_argument("--lang", default="", choices=["", "en", "zh"])
     p_council.add_argument("--json", action="store_true")
+
+    # mood
+    p_mood = sub.add_parser("mood", help="how are you feeling today?")
+    p_mood.add_argument("mood", nargs="?", default="", help="angry | worried | sad | …")
+    p_mood.add_argument("--why", default="", help="what is behind it, in your own words")
+    p_mood.add_argument("--schools", type=int, default=3, help="how many traditions answer (2–4)")
+    p_mood.add_argument("-k", type=int, default=6)
+    p_mood.add_argument("--model", default="", help="chat model for this run")
+    p_mood.add_argument("--chat-provider", default="", help="openai | azure | anthropic | gemini")
+    p_mood.add_argument("--profile", default="")
+    p_mood.add_argument("--lang", default="", choices=["", "en", "zh"])
+    p_mood.add_argument("--show-sources", "-s", action="store_true")
+    p_mood.add_argument("--list", action="store_true", dest="list_only", help="list the moods")
+    p_mood.add_argument("--json", action="store_true")
 
     # daily
     p_daily = sub.add_parser("daily", help="today's personalised piece")
@@ -305,6 +323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "ask": cmd_ask,
         "chat": cmd_chat,
         "council": cmd_council,
+        "mood": cmd_mood,
         "daily": cmd_daily,
         "save": cmd_save,
         "decide": cmd_decide,
@@ -1059,6 +1078,62 @@ def cmd_daily(args: argparse.Namespace, settings: Settings, console: Console) ->
             console, settings, result.piece.theme,
             Answer(question=result.piece.theme, sources=result.piece.sources),
         )
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------
+# mood
+# --------------------------------------------------------------------------
+
+
+def cmd_mood(args: argparse.Namespace, settings: Settings, console: Console) -> int:
+    profile = _load_profile(settings, args.profile)
+    lang = args.lang or (profile.language if profile else "") or ""
+
+    if args.list_only or not args.mood:
+        console.print()
+        console.print(rule(L("mood", lang or "en")))
+        console.print()
+        console.print(mood_cards(MOODS, lang=lang or "en"))
+        console.print()
+        console.print(hint('philo mood worried --why "a talk tomorrow I am not ready for"'))
+        return EXIT_OK if args.list_only else EXIT_USAGE
+
+    engine = _engine(settings)
+    try:
+        with Spinner(console, "asking several traditions"):
+            reading = read_mood(
+                engine, args.mood,
+                reason=args.why, k=args.k, lang=lang,
+                reader_note=profile.reader_note() if profile else "",
+                chat_model=args.model, chat_provider=args.chat_provider,
+                schools=args.schools,
+            )
+    except ValueError as exc:
+        console.print(error_panel("mood", str(exc), hint_text="`philo mood --list` shows them all."))
+        return EXIT_USAGE
+
+    if args.json:
+        print(json.dumps(reading.to_dict(), ensure_ascii=False, indent=2))
+        return EXIT_OK if reading.grounded else EXIT_ERROR
+
+    lang = lang or reading.lang
+    _header(console, settings)
+    console.print(rule(f"{L('mood', lang)}  ·  {reading.mood_label}"))
+    console.print()
+    if not reading.grounded:
+        console.print(error_panel("mood", reading.feeling))
+        return EXIT_ERROR
+
+    console.print(mood_view(reading, lang=lang, show_sources=args.show_sources))
+    console.print()
+    console.print(
+        status_bar([
+            ("model", reading.model or "—"),
+            ("sources", str(len(reading.sources))),
+            ("took", human_ms(reading.took_ms)),
+        ])
+    )
     return EXIT_OK
 
 
