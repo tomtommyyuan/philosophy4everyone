@@ -124,6 +124,7 @@ class Settings:
     library_dir: Path = field(init=False)
     index_dir: Path = field(init=False)
     profiles_dir: Path = field(init=False)
+    chronicle_dir: Path = field(init=False)
     # True when running inside a checkout; False when installed, in which
     # case everything lives under ~/.philo.
     in_project: bool = field(init=False, default=False)
@@ -200,6 +201,7 @@ class Settings:
         self.library_dir = _anchor(env_str("PHILO_LIBRARY"), base / "library")
         self.index_dir = _anchor(env_str("PHILO_INDEX"), default_index)
         self.profiles_dir = _anchor(env_str("PHILO_PROFILES"), base / "profiles")
+        self.chronicle_dir = _anchor(env_str("PHILO_CHRONICLE"), base / "chronicle")
 
     # ------------------------------------------------------------------
     @classmethod
