@@ -1071,7 +1071,7 @@ def _book(settings: Settings, name: str) -> Chronicle:
     return Chronicle.for_profile(settings.chronicle_dir, name or DEFAULT_PROFILE_NAME)
 
 
-def _look_hits(answer_or_result: Any) -> list[dict[str, str]]:
+def _look_hits(hits: Sequence[Any]) -> list[dict[str, str]]:
     """Flatten retrieved passages into what `philo save` needs later."""
     return [
         {
@@ -1083,7 +1083,7 @@ def _look_hits(answer_or_result: Any) -> list[dict[str, str]]:
             "section": h.chunk.section,
             "tradition": h.chunk.tradition,
         }
-        for h in answer_or_result
+        for h in hits
     ]
 
 
