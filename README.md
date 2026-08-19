@@ -183,6 +183,8 @@ rather than leaking into the pipeline:
 | `philo fetch` | Download the public-domain texts into the library |
 | `philo chat` | Conversation that remembers the last few turns |
 | `philo council "question"` | Three traditions answer independently, then argue |
+| `philo mood worried` | How are you feeling? Several schools answer |
+| `philo paper F --as NAME` | Read a modern paper as one philosopher would |
 | `philo daily` | Today's personalised "Daily Philosophy" |
 | `philo save N` | Keep a passage from the last answer or search |
 | `philo decide "situation"` | Log a decision; get the tests the texts supply |
@@ -217,6 +219,11 @@ philo search "what is in my control" && philo save 1 2
 philo decide "should I say what I think in tomorrow's meeting?"
 philo chronicle --kind decision
 philo recap --days 14
+
+philo mood --list
+philo mood worried --why "a talk tomorrow I am not ready for"
+philo paper thesis.pdf --as "David Hume"
+cat paper.txt | philo paper - --as "Mary Wollstonecraft"
 ```
 
 `philo search` is the debugging tool worth knowing: it shows the blended score,
@@ -241,10 +248,10 @@ offline and inside a strict content-security policy.
 Questions live in the URL (`/?q=why+do+we+fear+death`), so an answer is
 shareable.
 
-Five tabs: **Ask**, **Council**, **Daily**, **Chronicle**, **Library**. Council
-and Chronicle are described in their own sections below; both work the same way
-in the browser as in the terminal, except that the chronicle lives in this
-browser rather than in a file.
+Seven tabs: **Ask**, **Today**, **Council**, **Paper**, **Daily**,
+**Chronicle**, **Library** — each described in its own section below. All work
+the same way in the browser as in the terminal, except that the chronicle lives
+in this browser rather than in a file.
 
 ### Conversations and follow-ups
 
@@ -370,6 +377,79 @@ and `0` disables the endpoint.
 
 Not streamed: three completions arriving interleaved is noise, and the value is
 in reading them side by side.
+
+---
+
+## The check-in
+
+```bash
+philo mood --list
+philo mood worried --why "a talk tomorrow I am not ready for"
+```
+
+Pick how you feel, optionally say why, and two or three traditions answer
+separately — each quoting a real passage, and disagreeing where they actually
+disagree. It is not therapy: nothing here will tell you the feeling is valid or
+that it will pass.
+
+The interesting part is not the prompt, it is the **vocabulary bridge**. The
+names people give feelings today are not the names these translators used, and
+the gap is uneven. Counted over `library/` with the same tokeniser BM25 uses:
+
+| mood | its modern name | its period terms |
+|---|---:|---:|
+| worried | **0** | 2700 |
+| stuck | **0** | 437 |
+| lonely | 6 | 859 |
+| frustrated | 4 | 75 |
+| angry | 138 | 161 |
+
+"Angry" needs no help. **"Worried" does not appear in this library once** — the
+passages about it say *fear*, *apprehension*, *dread*, *solicitude*. Ask in the
+modern word and hybrid retrieval has nothing to match lexically and only a weak
+dense signal, so it hands back the least irrelevant paragraph it owns. Each mood
+therefore carries the words the texts themselves reach for, and the query is
+those plus whatever you typed. Asking as *worried* retrieves Epictetus's chapter
+titled "On Anxiety (solicitude)" at 0.96.
+
+One completion, not one per school — a daily check-in that costs four model
+calls is one nobody leaves switched on.
+
+---
+
+## Reading a paper
+
+```bash
+philo paper thesis.pdf --as "David Hume"
+```
+
+Upload something written this decade, name a philosopher, and get their reading:
+what they would recognise, what they would refuse, and the question they would
+put to the authors.
+
+**Kant never read a paper on transformer interpretability.** Anything of the
+form "Kant would say…" is a conclusion drawn from what he wrote, not a thing he
+wrote, and blurring those two produces exactly the confident fabrication the
+rest of this project is built against. So the seam is enforced: his *positions*
+are retrieved and carry `[n]` like any other claim about the record, while the
+*application* to the paper has to be marked as reasoning in the sentence itself.
+The prompt also forbids impersonation — a reading, not a séance.
+
+It runs as **two completions**, and the first pays for itself twice. It reads
+the paper and says what it claims in the vocabulary the library would use. That
+is the receipt that the paper was actually read, and it doubles as the retrieval
+query: an ML abstract full of "benchmark" and "ablation" retrieves nothing from
+a shelf that ends in 1929, while "what we can know from repeated observation"
+retrieves Hume.
+
+`--as` takes **any** name. Someone in the library is quoted and cited; someone
+who is not gets an honest unsourced reading, marked as such, with every `[n]`
+stripped. Refusing to read a paper as Popper because Popper is still in
+copyright would be a worse answer than the one the system can give.
+
+PDFs need `pip install 'philo[pdf]'`. A scanned PDF is images with no text
+layer, and the error says so rather than claiming your forty-page document is
+too short.
 
 ---
 
@@ -691,6 +771,13 @@ pip install "philo[openai]"     # or [anthropic], [gemini], [web], [fast], [all]
   is a fact about what got indexed, not about philosophy. Two of the fourteen
   works are Mill's and two are Stoic, so some questions seat a narrower room
   than the format implies — the seat scores are printed so you can see it.
+- **The check-in reads the mood, not you.** It has no memory of yesterday's
+  check-in and no idea whether you are actually all right. It is a way into the
+  texts, not a wellbeing product, and it should not be used as one.
+- **A paper reading is inference and can be confidently wrong.** The citations
+  under it are real; the leap from them to "what he would say about this" is the
+  model's, and a philosopher's texts frequently do not settle it. Read the
+  quoted passages, not just the conclusion.
 - **The chronicle is per-browser on the web.** No accounts, no sync. Clearing
   site data clears the record; **Export** is the only backup. The CLI's copy is
   a real file you can back up, and the two do not talk to each other.
