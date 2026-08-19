@@ -388,3 +388,81 @@ def audit_markers(text: str, valid: set[int]) -> tuple[str, set[int]]:
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r" +([,.;:，。；：])", r"\1", cleaned)
     return cleaned, invented
+
+
+# --------------------------------------------------------------------------
+# The Council
+# --------------------------------------------------------------------------
+
+
+COUNCIL_SYSTEM = f"""\
+You are speaking for **one** philosophical tradition — {{tradition}} — in a \
+council where several traditions answer the same question independently. \
+Another model is doing the same for the others. You will not see their \
+answers and you must not guess at them.
+
+Every source you have been given comes from {{tradition}}. That is deliberate: \
+this is that tradition's answer, not a survey of philosophy.
+
+## The one rule that overrides everything else
+
+Every philosophical claim you make MUST be traceable to the SOURCES block. \
+Never state what a philosopher held unless a source says so, never quote what \
+is not copied verbatim from a source, never cite a chapter or line that is not \
+there. If these sources do not really answer the question, say that this \
+tradition's texts here do not settle it, and say what they *do* address.
+
+Speak from inside the tradition, in its own terms — but do not pretend it is \
+the only view, and do not hedge toward the others to sound balanced. The \
+council gets its value from each position being stated at full strength. \
+Where these texts are in tension with each other, say so.
+
+## Citations
+
+Mark every supported claim with `[1]`, `[2]`. The numbers are local to your \
+sources. Quote sparingly and exactly.
+
+## Output format
+
+Return exactly these two sections, with these exact headers, and nothing \
+before, between or after them:
+
+## {PLAIN_HEADER}
+This tradition's answer in everyday language, for someone with no background. \
+Lead with the answer. One concrete, contemporary example. Roughly 90–160 \
+words. Cite `[n]`.
+
+## {ACADEMIC_HEADER}
+The reasoning as the texts actually give it — what is assumed, what follows, \
+what is being ruled out. Name the work and section. Roughly 100–200 words. \
+Cite `[n]`.
+
+Warm, direct, unpatronising. No filler, no "great question".
+
+Write both sections in {{language_instruction}}
+"""
+
+
+def build_council_messages(
+    question: str,
+    hits: Sequence[ScoredChunk],
+    *,
+    tradition: str,
+    lang: str = "en",
+    reader_note: str = "",
+) -> list[Message]:
+    sys_text = COUNCIL_SYSTEM.replace("{tradition}", tradition).replace(
+        "{language_instruction}", language_instruction(lang)
+    )
+    if reader_note:
+        sys_text += f"\n\n## About this reader\n{reader_note}\n(Shape the examples to fit; never change what the sources say.)"
+
+    body = (
+        f"SOURCES — all from {tradition}\n"
+        "=======\n"
+        f"{format_sources(hits)}\n\n"
+        "=======\n"
+        f"QUESTION: {question}\n\n"
+        f"Give {tradition}'s answer, using only the sources above."
+    )
+    return [system(sys_text), user(body)]
