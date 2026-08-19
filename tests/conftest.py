@@ -102,8 +102,13 @@ def library(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def settings(tmp_path: Path, library: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    # Every provider prefix, not just the two this fixture configures. A real
+    # ANTHROPIC_API_KEY in the developer's shell otherwise leaks in and the
+    # suite stops being hermetic — it starts reporting on whoever ran it.
     for name in list(os.environ):
-        if name.startswith(("PHILO_", "OPENAI_", "AZURE_OPENAI_")):
+        if name.startswith(
+            ("PHILO_", "OPENAI_", "AZURE_OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_")
+        ):
             monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("PHILO_PROVIDER", "mock")
     monkeypatch.setenv("PHILO_MOCK_DELAY", "0")
