@@ -28,7 +28,7 @@ import threading
 from pathlib import Path
 from typing import Any, Iterator
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,12 @@ from ..chronicle import KINDS, Chronicle, Entry, log_decision, weekly_recap
 from ..generation.answerer import AskOptions, Conversation, Engine
 from ..generation.council import DEFAULT_SEATS, MAX_SEATS, hold_council
 from ..generation.mood import MOODS, read_mood
+from ..generation.paper import (
+    MIN_PAPER_CHARS,
+    PaperError,
+    extract_pdf,
+    read_paper,
+)
 from ..personalize.daily import generate_daily
 from ..personalize.profile import DEFAULT_PROFILE_NAME, Profile
 from ..providers import get_provider
@@ -222,6 +228,23 @@ class MoodRequest(BaseModel):
     mood: str = Field(min_length=1, max_length=40)
     reason: str = Field(default="", max_length=1200)
     schools: int = Field(default=3, ge=2, le=4)
+    k: int = Field(default=6, ge=1, le=MAX_K)
+    model: str = Field(default="", max_length=120)
+    provider: str = Field(default="", max_length=32)
+    lang: str = ""
+    profile: str = ""
+
+
+# A paper is the one thing a visitor sends that is genuinely large. The
+# platform allows 100 MB bodies; this is about what fits in a prompt after
+# condense() trims it, with room for a PDF's overhead.
+MAX_PAPER_BYTES = 8 * 1024 * 1024
+MAX_PAPER_CHARS = 400_000
+
+
+class PaperRequest(BaseModel):
+    text: str = Field(default="", max_length=MAX_PAPER_CHARS)
+    philosopher: str = Field(min_length=1, max_length=120)
     k: int = Field(default=6, ge=1, le=MAX_K)
     model: str = Field(default="", max_length=120)
     provider: str = Field(default="", max_length=32)
@@ -540,6 +563,89 @@ def create_app() -> FastAPI:
         except ProviderError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc), "hint": exc.hint}) from exc
         return reading.to_dict()
+
+    # ---- reading a paper -----------------------------------------------
+    def _read_paper(
+        engine: Engine, text: str, philosopher: str, *,
+        k: int = 6, model: str = "", provider: str = "", lang: str = "", profile: str = "",
+    ) -> dict[str, Any]:
+        settings = settings_or_error()
+        reader = (
+            Profile.load_or_default(settings.profiles_dir, profile) if profile else None
+        )
+        try:
+            reading = read_paper(
+                engine, text, philosopher,
+                k=k,
+                lang=lang or (reader.language if reader else ""),
+                reader_note=reader.reader_note() if reader else "",
+                chat_model=model.strip(),
+                chat_provider=provider.strip(),
+            )
+        except PaperError as exc:
+            raise HTTPException(
+                status_code=422, detail={"error": str(exc), "hint": exc.hint}
+            ) from exc
+        except ProviderError as exc:
+            raise HTTPException(
+                status_code=502, detail={"error": str(exc), "hint": exc.hint}
+            ) from exc
+        return reading.to_dict()
+
+    @app.post("/api/paper", dependencies=[Depends(require_token)])
+    def paper(req: PaperRequest, engine: Engine = Depends(get_engine)) -> dict[str, Any]:
+        """Pasted text. PDFs go to /api/paper/upload."""
+        return _read_paper(
+            engine, req.text, req.philosopher,
+            k=req.k, model=req.model, provider=req.provider,
+            lang=req.lang, profile=req.profile,
+        )
+
+    @app.post("/api/paper/upload", dependencies=[Depends(require_token)])
+    def paper_upload(
+        file: UploadFile = File(...),
+        philosopher: str = Form(...),
+        model: str = Form(default=""),
+        provider: str = Form(default=""),
+        lang: str = Form(default=""),
+        profile: str = Form(default=""),
+        engine: Engine = Depends(get_engine),
+    ) -> dict[str, Any]:
+        data = file.file.read(MAX_PAPER_BYTES + 1)
+        if len(data) > MAX_PAPER_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "error": f"that file is larger than {MAX_PAPER_BYTES // (1024 * 1024)} MB",
+                    "hint": "Only the abstract, introduction and conclusion are read anyway — paste those.",
+                },
+            )
+        name = (file.filename or "").lower()
+        if name.endswith(".pdf") or data[:5] == b"%PDF-":
+            try:
+                text = extract_pdf(data)
+            except PaperError as exc:
+                raise HTTPException(
+                    status_code=422, detail={"error": str(exc), "hint": exc.hint}
+                ) from exc
+        else:
+            text = data.decode("utf-8", errors="replace")
+
+        if len(text.strip()) < MIN_PAPER_CHARS:
+            # The commonest cause by far is a scanned PDF: pypdf parses it
+            # happily and finds no text layer, so the failure has to name that
+            # rather than say "too short" about a 40-page document.
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "almost no text came out of that file",
+                    "hint": "If it is a scanned PDF it is images, with no text to read. Paste the text instead.",
+                },
+            )
+        return _read_paper(
+            engine, text, philosopher,
+            model=model, provider=provider, lang=lang, profile=profile,
+        )
 
     # ---- the chronicle -------------------------------------------------
     @app.post("/api/decide", dependencies=[Depends(require_token)])

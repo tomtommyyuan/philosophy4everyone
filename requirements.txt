@@ -11,3 +11,4 @@ openai>=1.30
 anthropic>=0.40
 google-genai>=1.0
 pypdf>=5.0
+python-multipart>=0.0.9

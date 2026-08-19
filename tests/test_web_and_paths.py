@@ -611,3 +611,91 @@ def test_a_mood_the_server_does_not_know_is_422_not_a_guess(client):
 def test_the_school_count_is_bounded(client):
     assert client.post("/api/mood", json={"mood": "sad", "schools": 9}).status_code == 422
     assert client.post("/api/mood", json={"mood": "sad", "schools": 1}).status_code == 422
+
+
+# --------------------------------------------------------------------------
+# Reading a paper
+# --------------------------------------------------------------------------
+
+WEB_PAPER = """\
+On the Limits of Extrapolation from Training Curves
+
+Abstract. Practitioners are disturbed not by the loss curve but by the opinion
+they hold about it. What is in our control is what we measured; the rest is
+opinion. Inferring capability from loss is an induction the data do not
+license, and the uniformity assumption behind it has not been defended.
+
+Conclusion. Capability claims should be grounded in direct measurement.
+"""
+
+
+def test_a_pasted_paper_is_read_as_the_named_philosopher(client):
+    d = client.post(
+        "/api/paper", json={"text": WEB_PAPER, "philosopher": "Epictetus"}
+    ).json()
+    assert d["philosopher"] == "Epictetus"
+    assert d["title"].startswith("On the Limits")
+    assert d["claims"]
+
+
+def test_a_philosopher_outside_the_library_is_answered_and_marked(client):
+    d = client.post(
+        "/api/paper", json={"text": WEB_PAPER, "philosopher": "Karl Popper"}
+    ).json()
+    assert d["grounded"] is False
+    assert d["sources"] == []
+
+
+def test_a_reading_has_to_be_somebodys(client):
+    assert client.post("/api/paper", json={"text": WEB_PAPER}).status_code == 422
+    assert client.post(
+        "/api/paper", json={"text": WEB_PAPER, "philosopher": ""}
+    ).status_code == 422
+
+
+def test_a_paragraph_is_refused_as_a_paper(client):
+    res = client.post("/api/paper", json={"text": "Too short.", "philosopher": "Epictetus"})
+    assert res.status_code == 422
+    assert "philo ask" in res.json()["detail"]["hint"]
+
+
+def test_a_file_upload_is_read_the_same_way(client):
+    res = client.post(
+        "/api/paper/upload",
+        files={"file": ("paper.txt", WEB_PAPER.encode(), "text/plain")},
+        data={"philosopher": "Epictetus"},
+    )
+    assert res.status_code == 200
+    assert res.json()["philosopher"] == "Epictetus"
+
+
+def test_a_pdf_with_no_text_layer_says_that_rather_than_too_short(client):
+    """The commonest upload failure is a scan, and "too short" would be a lie
+    about a forty-page document."""
+    res = client.post(
+        "/api/paper/upload",
+        files={"file": ("scan.pdf", b"%PDF-1.4 not really a pdf", "application/pdf")},
+        data={"philosopher": "Epictetus"},
+    )
+    assert res.status_code == 422
+    assert "canned" in res.json()["detail"]["hint"]
+
+
+def test_an_oversize_upload_is_413_not_a_timeout(client):
+    from philo.web.app import MAX_PAPER_BYTES
+
+    res = client.post(
+        "/api/paper/upload",
+        files={"file": ("big.txt", b"x" * (MAX_PAPER_BYTES + 1024), "text/plain")},
+        data={"philosopher": "Epictetus"},
+    )
+    assert res.status_code == 413
+
+
+def test_the_page_sends_multipart_without_forcing_a_content_type():
+    """FormData must set its own boundary; reusing the JSON headers breaks it."""
+    from philo.web.app import PAGE
+
+    page = PAGE.read_text(encoding="utf-8")
+    assert "function authHeaders()" in page
+    assert "headers: authHeaders()" in page

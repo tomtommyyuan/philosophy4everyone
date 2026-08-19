@@ -231,6 +231,21 @@ button.ghost.danger:hover { color:var(--err); border-color:var(--err); }
 }
 .seatline span.out { opacity:.5; text-decoration:line-through; }
 
+/* ---- paper ---- */
+.drop {
+  border:1.5px dashed var(--line); border-radius:12px; padding:22px 18px; text-align:center;
+  color:var(--muted); font-size:14px; margin:6px 8px 10px; cursor:pointer;
+  transition:border-color .15s, background .15s, color .15s;
+}
+.drop:hover, .drop.over { border-color:var(--violet); color:var(--ink); background:var(--violet-dim); }
+.drop b { display:block; color:var(--ink); font-size:15px; margin-bottom:3px; }
+.drop.loaded { border-style:solid; border-color:var(--ok); color:var(--ok); }
+.inference {
+  border:1px solid var(--line); border-left:3px solid var(--amber); border-radius:10px;
+  padding:11px 16px; margin-top:18px; font-size:13.5px; color:var(--muted);
+}
+.inference b { color:var(--amber); }
+
 /* ---- check-in ---- */
 .moods { display:flex; flex-wrap:wrap; gap:9px; margin:4px 0 14px; }
 .moods button {
@@ -348,6 +363,7 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
   <button role="tab" data-tab="ask" aria-selected="true">Ask</button>
   <button role="tab" data-tab="mood" aria-selected="false">Today</button>
   <button role="tab" data-tab="council" aria-selected="false">Council</button>
+  <button role="tab" data-tab="paper" aria-selected="false">Paper</button>
   <button role="tab" data-tab="daily" aria-selected="false">Daily</button>
   <button role="tab" data-tab="chronicle" aria-selected="false">Chronicle</button>
   <button role="tab" data-tab="library" aria-selected="false">Library</button>
@@ -433,6 +449,30 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
       for the objection.</div>
   </form>
   <div id="council-out"></div>
+</section>
+
+<!-- ============================ PAPER ============================ -->
+<section id="tab-paper" class="hidden">
+  <form class="askbox" id="paperform">
+    <div class="drop" id="paper-drop" tabindex="0" role="button">
+      <b>Drop a paper here, or click to choose</b>
+      PDF, .txt or .md — or just paste the text below
+      <input type="file" id="paper-file" accept=".pdf,.txt,.md,.markdown,.tex" hidden>
+    </div>
+    <div class="askrow">
+      <textarea id="pq" rows="1" placeholder="…or paste the abstract, introduction and conclusion here."></textarea>
+      <button class="primary" type="submit">Read it</button>
+    </div>
+    <div class="filters">
+      <input class="tok" id="p-who" style="min-width:230px" list="p-who-list"
+             placeholder="Read it as… (any philosopher)" autocomplete="off">
+      <datalist id="p-who-list"></datalist>
+    </div>
+    <div class="hintline">Whoever you name never read this paper. Their positions are quoted from
+      the library where it has them; applying those positions to the paper is inference, and the
+      page says which is which.</div>
+  </form>
+  <div id="paper-out"></div>
 </section>
 
 <!-- ============================ DAILY ============================ -->
@@ -547,6 +587,12 @@ function currentToken() {
   return typed || localStorage.getItem(TOKEN_KEY) || "";
 }
 
+function authHeaders() {
+  // The token alone. FormData must set its own Content-Type, boundary and all,
+  // so a multipart request cannot reuse headers() below.
+  const t = currentToken();
+  return t ? { "X-Philo-Token": t } : {};
+}
 function headers() {
   const h = { "Content-Type": "application/json" };
   const t = currentToken();
@@ -1105,6 +1151,120 @@ async function toError(res) {
   return e;
 }
 
+/* ---------------- reading a paper ---------------- */
+let PAPER_FILE = null;
+
+function wirePaperDrop() {
+  const drop = $("#paper-drop"), input = $("#paper-file");
+  const take = (file) => {
+    PAPER_FILE = file || null;
+    drop.classList.toggle("loaded", !!file);
+    drop.innerHTML = file
+      ? `<b>${esc(file.name)}</b>${Math.round(file.size / 1024)} KB — click to choose another`
+      : `<b>Drop a paper here, or click to choose</b>
+         PDF, .txt or .md — or just paste the text below`;
+    drop.appendChild(input);
+  };
+  drop.addEventListener("click", () => input.click());
+  drop.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); }
+  });
+  input.addEventListener("change", () => take(input.files[0]));
+  ["dragenter", "dragover"].forEach(ev =>
+    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach(ev =>
+    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", e => take(e.dataTransfer.files[0]));
+}
+
+async function loadPhilosophers() {
+  // Suggestions, not a menu: any name is allowed, and the ones in the list
+  // are simply the ones that come back with citations.
+  try {
+    const d = await api("/api/sources");
+    $("#p-who-list").innerHTML =
+      d.philosophers.map(p => `<option value="${esc(p)}">`).join("");
+  } catch { /* the field still works free-text */ }
+}
+
+async function readPaper(pasted) {
+  const who = $("#p-who").value.trim();
+  if (!who) {
+    paint("#paper-out", `<div class="notice warn"><b>Read it as whom?</b>
+      A reading has to be somebody's. Any philosopher is allowed — the ones in
+      the library come back with citations, the rest come back marked unsourced.</div>`);
+    $("#p-who").focus();
+    return;
+  }
+  if (!PAPER_FILE && !pasted.trim()) {
+    paint("#paper-out", `<div class="notice warn"><b>No paper yet.</b>
+      Drop a file above, or paste the abstract, introduction and conclusion.</div>`);
+    return;
+  }
+
+  const button = $("#paperform button.primary");
+  button.disabled = true;
+  paint("#paper-out", `<div class="card"><h2>Reading it as ${esc(who)} would</h2>
+      <div class="streaming pulse">Working out what the paper claims, then what the texts say…</div></div>`);
+  try {
+    const pick = chosenModel();
+    let r;
+    if (PAPER_FILE) {
+      const form = new FormData();
+      form.append("file", PAPER_FILE);
+      form.append("philosopher", who);
+      form.append("model", pick.model || "");
+      form.append("provider", pick.provider || "");
+      // No Content-Type: the browser has to set the multipart boundary itself.
+      const res = await fetch("/api/paper/upload", {
+        method: "POST", headers: authHeaders(), body: form,
+      });
+      if (!res.ok) throw await toError(res);
+      r = await res.json();
+    } else {
+      r = await api("/api/paper", {
+        method: "POST",
+        body: JSON.stringify({
+          text: pasted, philosopher: who,
+          model: pick.model || "", provider: pick.provider || "",
+        }),
+      });
+    }
+    paint("#paper-out", renderPaper(r));
+    wireKeep($("#paper-out"), r.sources);
+  } catch (err) {
+    paint("#paper-out", errorCard(err));
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderPaper(r) {
+  let html = "";
+  if (r.title) html += `<p class="askedwhy" style="margin:18px 0 0;font-size:17px">${esc(r.title)}</p>`;
+  html += `<div class="inference"><b>↯ A reading, not a record.</b>
+    ${esc(r.philosopher)} never read this paper. The citations below are theirs;
+    applying them to this paper is the model's inference.</div>`;
+  if (!r.grounded) {
+    html += `<div class="warnbar"><b>Nothing by ${esc(r.philosopher)} is in this library.</b>
+      So there are no citations at all, and none of what follows can be checked against
+      a text. Try one of the names in the box for a sourced reading.</div>`;
+  }
+  for (const [title, body, cls] of [["What the paper claims", r.claims, ""],
+                                    ["Where they would agree", r.agree, ""],
+                                    ["Where they would object", r.object, "amber"],
+                                    ["The question they would put", r.question, ""]]) {
+    if (body && body.trim()) {
+      html += `<div class="card ${cls}${r.grounded ? "" : " ungrounded"}"><h2>${title}</h2>
+        <div class="body serif">${markdown(body)}</div></div>`;
+    }
+  }
+  html += sourceList(r.sources);
+  html += `<div class="foot">${(r.n_chars || 0).toLocaleString()} characters read  ·
+    via ${esc(r.provider)}  ·  ${esc(r.model)}  ·  ${r.took_ms} ms</div>`;
+  return html;
+}
+
 /* ---------------- the check-in ---------------- */
 const MOOD_KEY = "philo.mood";
 let MOODS = [], MOOD = "";
@@ -1319,9 +1479,10 @@ async function library() {
 /* ---------------- tabs ---------------- */
 function switchTab(name) {
   $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
-  ["ask", "mood", "council", "daily", "chronicle", "library"].forEach(t =>
+  ["ask", "mood", "council", "paper", "daily", "chronicle", "library"].forEach(t =>
     $("#tab-" + t).classList.toggle("hidden", t !== name));
   if (name === "mood" && !MOODS.length) loadMoods();
+  if (name === "paper" && !$("#p-who-list").children.length) loadPhilosophers();
   if (name === "library" && !$("#library-out").dataset.loaded) {
     $("#library-out").dataset.loaded = "1";
     library();
@@ -1367,12 +1528,15 @@ const EXAMPLES = [
   const cq = compose("#cq", v => council(v));
   const dq = compose("#dq", v => decide(v));
   const mq = compose("#mq", v => checkIn(v.trim()));
+  const pq = compose("#pq", v => readPaper(v));
   compose("#theme", v => daily(v.trim()));
 
   $("#askform").addEventListener("submit", e => { e.preventDefault(); ask(q.value); });
   $("#councilform").addEventListener("submit", e => { e.preventDefault(); council(cq.value); });
   $("#decideform").addEventListener("submit", e => { e.preventDefault(); decide(dq.value); });
   $("#moodform").addEventListener("submit", e => { e.preventDefault(); checkIn(mq.value.trim()); });
+  $("#paperform").addEventListener("submit", e => { e.preventDefault(); readPaper(pq.value); });
+  wirePaperDrop();
   $("#dailyform").addEventListener("submit", e => { e.preventDefault(); daily($("#theme").value.trim()); });
 
   loadChronicle();

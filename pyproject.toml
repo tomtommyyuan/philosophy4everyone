@@ -24,12 +24,13 @@ gemini = ["google-genai>=1.0"]
 # ~50x faster similarity search. Pure-Python fallback used when absent.
 fast = ["numpy>=1.24"]
 # The HTTP interface (`philo serve`, and any hosted deployment).
-web = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9"]
 # Reading a PDF in `philo paper`. Pasted text needs nothing.
 pdf = ["pypdf>=5.0"]
 all = [
   "openai>=1.30", "anthropic>=0.40", "google-genai>=1.0",
-  "numpy>=1.24", "fastapi>=0.110", "uvicorn[standard]>=0.27", "pypdf>=5.0",
+  "numpy>=1.24", "fastapi>=0.110", "uvicorn[standard]>=0.27",
+  "pypdf>=5.0", "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
