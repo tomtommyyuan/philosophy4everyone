@@ -37,6 +37,7 @@ from ..config import ConfigError, Settings, get_settings
 from ..chronicle import KINDS, Chronicle, Entry, log_decision, weekly_recap
 from ..generation.answerer import AskOptions, Conversation, Engine
 from ..generation.council import DEFAULT_SEATS, MAX_SEATS, hold_council
+from ..generation.mood import MOODS, read_mood
 from ..personalize.daily import generate_daily
 from ..personalize.profile import DEFAULT_PROFILE_NAME, Profile
 from ..providers import get_provider
@@ -215,6 +216,17 @@ class ChronicleEntry(BaseModel):
             work_title=self.work_title,
             section=self.section,
         )
+
+
+class MoodRequest(BaseModel):
+    mood: str = Field(min_length=1, max_length=40)
+    reason: str = Field(default="", max_length=1200)
+    schools: int = Field(default=3, ge=2, le=4)
+    k: int = Field(default=6, ge=1, le=MAX_K)
+    model: str = Field(default="", max_length=120)
+    provider: str = Field(default="", max_length=32)
+    lang: str = ""
+    profile: str = ""
 
 
 class DecideRequest(BaseModel):
@@ -492,6 +504,42 @@ def create_app() -> FastAPI:
         payload = result.to_dict()
         payload["min_score"] = settings.min_score
         return payload
+
+    # ---- the check-in --------------------------------------------------
+    @app.get("/api/moods")
+    def moods() -> dict[str, Any]:
+        """The cards. Served rather than hardcoded in the page so the picker
+        and the retrieval terms can never disagree about what a mood is."""
+        return {
+            "moods": [
+                {"key": m.key, "en": m.en, "zh": m.zh, "terms": list(m.terms)}
+                for m in MOODS
+            ]
+        }
+
+    @app.post("/api/mood", dependencies=[Depends(require_token)])
+    def mood(req: MoodRequest, engine: Engine = Depends(get_engine)) -> dict[str, Any]:
+        settings = settings_or_error()
+        profile = (
+            Profile.load_or_default(settings.profiles_dir, req.profile) if req.profile else None
+        )
+        try:
+            reading = read_mood(
+                engine,
+                req.mood,
+                reason=req.reason,
+                k=req.k,
+                lang=req.lang or (profile.language if profile else ""),
+                reader_note=profile.reader_note() if profile else "",
+                chat_model=req.model.strip(),
+                chat_provider=req.provider.strip(),
+                schools=req.schools,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail={"error": str(exc)}) from exc
+        except ProviderError as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc), "hint": exc.hint}) from exc
+        return reading.to_dict()
 
     # ---- the chronicle -------------------------------------------------
     @app.post("/api/decide", dependencies=[Depends(require_token)])

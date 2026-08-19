@@ -231,6 +231,24 @@ button.ghost.danger:hover { color:var(--err); border-color:var(--err); }
 }
 .seatline span.out { opacity:.5; text-decoration:line-through; }
 
+/* ---- check-in ---- */
+.moods { display:flex; flex-wrap:wrap; gap:9px; margin:4px 0 14px; }
+.moods button {
+  appearance:none; cursor:pointer; font:inherit; font-size:14px;
+  background:var(--panel); color:var(--muted);
+  border:1px solid var(--line); border-radius:999px; padding:9px 17px;
+  transition:border-color .15s, color .15s, background .15s;
+}
+.moods button:hover { color:var(--ink); border-color:var(--violet); }
+.moods button.on {
+  background:var(--violet); border-color:var(--violet); color:#fff; font-weight:600;
+}
+.moods button .zh { opacity:.65; margin-left:7px; font-size:12.5px; }
+.moods button.on .zh { opacity:.8; }
+.askedwhy { font-family:var(--serif); font-size:15px; color:var(--muted); margin:0 0 4px; }
+.card.practice-card { border-color:var(--ok); }
+.card.practice-card > h2 { color:var(--ok); }
+
 /* ---- chronicle ---- */
 .keep {
   appearance:none; background:none; border:1px solid var(--line); border-radius:7px;
@@ -328,6 +346,7 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
 
 <nav class="tabs" role="tablist">
   <button role="tab" data-tab="ask" aria-selected="true">Ask</button>
+  <button role="tab" data-tab="mood" aria-selected="false">Today</button>
   <button role="tab" data-tab="council" aria-selected="false">Council</button>
   <button role="tab" data-tab="daily" aria-selected="false">Daily</button>
   <button role="tab" data-tab="chronicle" aria-selected="false">Chronicle</button>
@@ -372,6 +391,21 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
   </form>
 
   <div class="examples" id="examples"></div>
+</section>
+
+<!-- ============================ TODAY ============================ -->
+<section id="tab-mood" class="hidden">
+  <form class="askbox" id="moodform">
+    <p class="askedwhy" style="padding:14px 14px 2px;margin:0">How are you feeling today?</p>
+    <div class="moods" id="mood-cards" style="padding:0 14px"></div>
+    <div class="askrow">
+      <textarea id="mq" rows="1" placeholder="If you want to say why — a sentence is enough."></textarea>
+      <button class="primary" type="submit">Ask the schools</button>
+    </div>
+    <div class="hintline">Two or three traditions answer separately, each quoting a real passage.
+      They disagree on purpose. Not therapy — nobody here will tell you the feeling is valid.</div>
+  </form>
+  <div id="mood-out"></div>
 </section>
 
 <!-- ============================ COUNCIL ============================ -->
@@ -1071,6 +1105,79 @@ async function toError(res) {
   return e;
 }
 
+/* ---------------- the check-in ---------------- */
+const MOOD_KEY = "philo.mood";
+let MOODS = [], MOOD = "";
+
+async function loadMoods() {
+  const box = $("#mood-cards");
+  try {
+    MOODS = (await api("/api/moods")).moods;
+  } catch {
+    // The picker is useless without the server's list, and hardcoding a copy
+    // here is how the cards and the retrieval terms drift apart.
+    box.innerHTML = `<span class="hintline">Could not load the moods.</span>`;
+    return;
+  }
+  MOOD = localStorage.getItem(MOOD_KEY) || "";
+  if (!MOODS.some(m => m.key === MOOD)) MOOD = "";
+  box.innerHTML = MOODS.map(m =>
+    `<button type="button" data-mood="${esc(m.key)}"${m.key === MOOD ? ' class="on"' : ""}>
+       ${esc(m.en)}<span class="zh">${esc(m.zh)}</span></button>`).join("");
+  $$("#mood-cards button").forEach(el => el.addEventListener("click", () => {
+    MOOD = el.dataset.mood;
+    localStorage.setItem(MOOD_KEY, MOOD);
+    $$("#mood-cards button").forEach(x => x.classList.toggle("on", x === el));
+  }));
+}
+
+async function checkIn(reason) {
+  if (!MOOD) {
+    paint("#mood-out", `<div class="notice warn"><b>Pick one first.</b>
+      The mood is what decides which words this library gets searched with —
+      "worried" does not appear in it once, but <i>fear</i>, <i>apprehension</i>
+      and <i>solicitude</i> are everywhere.</div>`);
+    return;
+  }
+  const button = $("#moodform button.primary");
+  button.disabled = true;
+  paint("#mood-out", `<div class="card"><h2>Asking several traditions</h2>
+      <div class="streaming pulse">…</div></div>`);
+  try {
+    const pick = chosenModel();
+    const r = await api("/api/mood", {
+      method: "POST",
+      body: JSON.stringify({
+        mood: MOOD, reason: reason || "",
+        model: pick.model || "", provider: pick.provider || "",
+      }),
+    });
+    if (!r.grounded) {
+      paint("#mood-out", `<div class="notice warn">${markdown(r.feeling)}</div>`);
+      return;
+    }
+    let html = "";
+    if (r.reason) html += `<p class="askedwhy" style="margin:18px 0 0">“${esc(r.reason)}”</p>`;
+    for (const [title, body, cls] of [["What is happening", r.feeling, ""],
+                                      ["What the schools say", r.schools, ""],
+                                      ["One thing to try", r.practice, "practice-card"]]) {
+      if (body && body.trim()) {
+        html += `<div class="card ${cls}"><h2>${title}</h2>
+          <div class="body serif">${markdown(body)}</div></div>`;
+      }
+    }
+    html += sourceList(r.sources);
+    html += `<div class="foot">via ${esc(r.provider)}  ·  ${esc(r.model)}  ·
+      ${r.sources.length} sources  ·  ${r.took_ms} ms</div>`;
+    paint("#mood-out", html);
+    wireKeep($("#mood-out"), r.sources);
+  } catch (err) {
+    paint("#mood-out", errorCard(err));
+  } finally {
+    button.disabled = false;
+  }
+}
+
 /* ---------------- council ---------------- */
 let councilBusy = false;
 async function council(question) {
@@ -1212,8 +1319,9 @@ async function library() {
 /* ---------------- tabs ---------------- */
 function switchTab(name) {
   $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
-  ["ask", "council", "daily", "chronicle", "library"].forEach(t =>
+  ["ask", "mood", "council", "daily", "chronicle", "library"].forEach(t =>
     $("#tab-" + t).classList.toggle("hidden", t !== name));
+  if (name === "mood" && !MOODS.length) loadMoods();
   if (name === "library" && !$("#library-out").dataset.loaded) {
     $("#library-out").dataset.loaded = "1";
     library();
@@ -1258,11 +1366,13 @@ const EXAMPLES = [
   const q = compose("#q", v => ask(v));
   const cq = compose("#cq", v => council(v));
   const dq = compose("#dq", v => decide(v));
+  const mq = compose("#mq", v => checkIn(v.trim()));
   compose("#theme", v => daily(v.trim()));
 
   $("#askform").addEventListener("submit", e => { e.preventDefault(); ask(q.value); });
   $("#councilform").addEventListener("submit", e => { e.preventDefault(); council(cq.value); });
   $("#decideform").addEventListener("submit", e => { e.preventDefault(); decide(dq.value); });
+  $("#moodform").addEventListener("submit", e => { e.preventDefault(); checkIn(mq.value.trim()); });
   $("#dailyform").addEventListener("submit", e => { e.preventDefault(); daily($("#theme").value.trim()); });
 
   loadChronicle();

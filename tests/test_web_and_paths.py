@@ -571,3 +571,43 @@ def test_the_page_scopes_keep_and_citations_per_turn():
     assert '$$(".turn", box).forEach' in page
     assert "function keptBefore" in page
     assert "CHRON_KEY" in page
+
+
+# --------------------------------------------------------------------------
+# The check-in
+# --------------------------------------------------------------------------
+
+MOOD_WHY = "someone disturbed me and I lost my opinion of what is in my control"
+
+
+def test_the_cards_are_served_not_hardcoded_in_the_page(client):
+    """One list, so the picker and the retrieval terms cannot disagree."""
+    from philo.web.app import PAGE
+
+    d = client.get("/api/moods").json()
+    keys = [m["key"] for m in d["moods"]]
+    assert "worried" in keys and "angry" in keys
+    assert all(m["en"] and m["zh"] and m["terms"] for m in d["moods"])
+
+    page = PAGE.read_text(encoding="utf-8")
+    assert "/api/moods" in page
+    # If the page ever grows its own copy of the list, this is the tripwire.
+    assert '"frustrated"' not in page
+
+
+def test_a_check_in_answers_with_sources(client):
+    d = client.post("/api/mood", json={"mood": "worried", "reason": MOOD_WHY}).json()
+    assert d["grounded"] is True
+    assert d["mood"] == "worried"
+    assert d["sources"]
+    assert d["feeling"]
+
+
+def test_a_mood_the_server_does_not_know_is_422_not_a_guess(client):
+    assert client.post("/api/mood", json={"mood": "hangry"}).status_code == 422
+    assert client.post("/api/mood", json={"mood": ""}).status_code == 422
+
+
+def test_the_school_count_is_bounded(client):
+    assert client.post("/api/mood", json={"mood": "sad", "schools": 9}).status_code == 422
+    assert client.post("/api/mood", json={"mood": "sad", "schools": 1}).status_code == 422
