@@ -74,6 +74,11 @@ LABELS: dict[str, tuple[str, str]] = {
     "schools": ("What the schools say", "各家会说什么"),
     "one_thing": ("One thing to try", "试一件小事"),
     "mood": ("Today", "今天"),
+    "claims": ("What the paper claims", "这篇论文主张什么"),
+    "agree": ("Where they would agree", "他会同意的地方"),
+    "object": ("Where they would object", "他会反对的地方"),
+    "putq": ("The question they would put", "他会问的问题"),
+    "inference": ("a reading, not a record", "这是推断，不是史料"),
     "tradition": ("Tradition", "传统"),
     "rights": ("Rights", "版权"),
     "chunks": ("Passages", "段落数"),
@@ -821,3 +826,82 @@ def mood_cards(moods: Sequence[Any], *, lang: str = "en", columns: int = 4) -> R
         row = cells[i:i + columns]
         table.add_row(*(row + [Text("")] * (columns - len(row))))
     return Padding(table, (0, 0, 0, 2))
+
+
+def paper_view(reading: Any, *, lang: str = "en", show_sources: bool = False) -> RenderableType:
+    """The claims first, then agree / object / question.
+
+    The banner is not decoration. Everything below it is inference from what
+    the philosopher wrote to a paper they never saw, and a reader who forgets
+    that is reading it as biography.
+    """
+    parts: list[RenderableType] = [
+        Panel(
+            Padding(
+                Text(
+                    f"{reading.philosopher} never read this paper. Everything below "
+                    "applies the record to it: the citations are the record, the "
+                    "application is the model's."
+                    if lang != "zh" else
+                    f"{reading.philosopher}没有读过这篇论文。下面是把原文应用到这篇论文上的推断——"
+                    "引注是原文，应用是模型的。",
+                    style="warn" if not reading.grounded else "muted",
+                ),
+                (0, 1),
+            ),
+            border_style="warn" if not reading.grounded else "frame.soft",
+            box=PANEL_BOX,
+            padding=0,
+        ),
+        Text(""),
+    ]
+
+    if not reading.grounded:
+        parts.append(
+            Panel(
+                Padding(
+                    Text(
+                        f"This library holds nothing by {reading.philosopher}, so nothing "
+                        "below is checkable against a text and no citations appear."
+                        if lang != "zh" else
+                        f"当前library里没有{reading.philosopher}的文本，所以下面没有任何出处可查。",
+                        style="warn",
+                    ),
+                    (0, 1),
+                ),
+                border_style="warn",
+                box=PANEL_BOX,
+                padding=0,
+            )
+        )
+        parts.append(Text(""))
+
+    for key, body, border in (
+        ("claims", reading.claims, "frame.soft"),
+        ("agree", reading.agree, "frame"),
+        ("object", reading.object, "warn"),
+        ("putq", reading.question, "frame"),
+    ):
+        if not (body or "").strip():
+            continue
+        parts.append(
+            Panel(
+                Padding(prose(body), (1, 2)),
+                title=_panel_title("◗", L(key, lang),
+                                   glyph_style=f"bold {VIOLET}", label_style="heading"),
+                title_align="left",
+                border_style=border,
+                box=PANEL_BOX,
+                padding=0,
+            )
+        )
+        parts.append(Text(""))
+
+    if reading.sources:
+        parts.append(rule(f"{L('sources', lang)}  ·  {len(reading.sources)}"))
+        parts.append(Text(""))
+        parts.append(sources_table(reading.sources, lang=lang))
+        if show_sources:
+            parts.append(Text(""))
+            parts.append(source_cards(reading.sources, lang=lang))
+    return Group(*parts)

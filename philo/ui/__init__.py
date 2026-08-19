@@ -16,6 +16,7 @@ from .components import (
     library_table,
     mood_cards,
     mood_view,
+    paper_view,
     prose,
     retrieval_table,
     rights_summary,
@@ -39,7 +40,7 @@ from .views import (
 __all__ = [
     "L", "Spinner", "StreamView", "answer_footer", "answer_view", "banner",
     "chronicle_table", "council_footer", "council_view", "decision_view",
-    "echo_line", "mood_cards", "mood_view", "recap_view",
+    "echo_line", "mood_cards", "mood_view", "paper_view", "recap_view",
     "daily_card", "deepest_section", "doctor_view", "error_panel", "gradient_text",
     "help_view", "prose",
     "ingest_summary", "library_table", "make_console", "make_ingest_progress",

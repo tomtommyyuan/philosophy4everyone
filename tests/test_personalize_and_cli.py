@@ -170,7 +170,7 @@ def test_cli_help_lists_every_command(capsys):
     code, out = run(["--help"], capsys)
     assert code == 0
     for command in ("ingest", "ask", "chat", "council", "mood", "daily", "save", "decide",
-                    "chronicle", "recap", "search", "sources", "profile", "doctor"):
+                    "chronicle", "recap", "paper", "search", "sources", "profile", "doctor"):
         assert command in out
 
 
@@ -261,6 +261,49 @@ def test_cli_unknown_mood_names_the_real_ones(cwd, capsys):
     assert code == 2
     assert "philo mood --list" in out
     assert "Traceback" not in out
+
+
+PAPER_FILE = """\
+On the Limits of Extrapolation from Training Curves
+
+Abstract. Practitioners are disturbed not by the loss curve but by the opinion
+they hold about it. What is in our control is what we measured; the rest is
+opinion. We argue that inferring capability from loss is an induction the data
+do not license, and that the field has not defended the uniformity assumption
+it rests on.
+
+Conclusion. Capability claims should be grounded in direct measurement.
+"""
+
+
+def test_cli_paper_needs_a_philosopher(cwd, capsys):
+    (cwd / "p.txt").write_text(PAPER_FILE, encoding="utf-8")
+    code, out = run(["paper", "p.txt"], capsys)
+    assert code == 2
+    assert "philo sources" in out
+
+
+def test_cli_paper_reads_a_file_as_one_philosopher(cwd, capsys):
+    (cwd / "p.txt").write_text(PAPER_FILE, encoding="utf-8")
+    code, out = run(["paper", "p.txt", "--as", "Epictetus", "--json"], capsys)
+    assert code == 0
+    reading = json.loads(out)
+    assert reading["philosopher"] == "Epictetus"
+    assert reading["title"].startswith("On the Limits")
+    assert reading["claims"]
+
+
+def test_cli_paper_reports_a_missing_file_without_a_traceback(cwd, capsys):
+    code, out = run(["paper", "nope.pdf", "--as", "Epictetus"], capsys)
+    assert code == 1
+    assert "Traceback" not in out
+
+
+def test_cli_paper_refuses_a_paragraph(cwd, capsys):
+    (cwd / "tiny.txt").write_text("Too short.", encoding="utf-8")
+    code, out = run(["paper", "tiny.txt", "--as", "Epictetus"], capsys)
+    assert code == 2
+    assert "philo ask" in out
 
 
 # --------------------------------------------------------------------------

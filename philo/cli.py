@@ -31,6 +31,7 @@ from .chronicle.store import last_look, remember_look
 from .generation.answerer import AskOptions, Conversation, Engine
 from .generation.council import DEFAULT_SEATS, MIN_SEATS, hold_council
 from .generation.mood import MOODS, read_mood
+from .generation.paper import PaperError, extract_text, read_paper
 from .models import Answer
 from .personalize.daily import generate_daily
 from .personalize.profile import DEFAULT_PROFILE_NAME, LEVELS, Profile, list_profiles
@@ -58,6 +59,7 @@ from .ui import (
     library_table,
     mood_cards,
     mood_view,
+    paper_view,
     make_console,
     make_ingest_progress,
     retrieval_table,
@@ -69,7 +71,7 @@ from .ui import (
 )
 from .ui.components import bullet_list, hint, keyval
 from .ui.theme import TABLE_BOX
-from .util import detect_language, human_ms, snippet
+from .util import detect_language, human_count, human_ms, snippet
 
 COMMANDS = [
     ("init", "", "create .env, a profile and a first index"),
@@ -79,6 +81,7 @@ COMMANDS = [
     ("chat", "", "a conversation that remembers the last few turns"),
     ("council", '"question"', "3 traditions answer independently, then argue"),
     ("mood", "[angry|worried|…]", "how are you feeling? several schools answer"),
+    ("paper", "FILE --as NAME", "read a modern paper as one philosopher would"),
     ("daily", "", "today's personalised Daily Philosophy"),
     ("save", "N [--note …]", "keep a passage from the last answer or search"),
     ("decide", '"situation"', "log a decision; get the tests the texts supply"),
@@ -186,6 +189,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_mood.add_argument("--show-sources", "-s", action="store_true")
     p_mood.add_argument("--list", action="store_true", dest="list_only", help="list the moods")
     p_mood.add_argument("--json", action="store_true")
+
+    # paper
+    p_paper = sub.add_parser("paper", help="read a paper as one philosopher would")
+    p_paper.add_argument("file", nargs="?", default="", help="a .pdf, .txt or .md (- for stdin)")
+    p_paper.add_argument("--as", dest="philosopher", default="",
+                         help="whose reading — any name; cited only if the library has them")
+    p_paper.add_argument("-k", type=int, default=6)
+    p_paper.add_argument("--model", default="", help="chat model for this run")
+    p_paper.add_argument("--chat-provider", default="", help="openai | azure | anthropic | gemini")
+    p_paper.add_argument("--profile", default="")
+    p_paper.add_argument("--lang", default="", choices=["", "en", "zh"])
+    p_paper.add_argument("--show-sources", "-s", action="store_true")
+    p_paper.add_argument("--json", action="store_true")
 
     # daily
     p_daily = sub.add_parser("daily", help="today's personalised piece")
@@ -324,6 +340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "chat": cmd_chat,
         "council": cmd_council,
         "mood": cmd_mood,
+        "paper": cmd_paper,
         "daily": cmd_daily,
         "save": cmd_save,
         "decide": cmd_decide,
@@ -1134,6 +1151,69 @@ def cmd_mood(args: argparse.Namespace, settings: Settings, console: Console) -> 
             ("took", human_ms(reading.took_ms)),
         ])
     )
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------
+# paper
+# --------------------------------------------------------------------------
+
+
+def cmd_paper(args: argparse.Namespace, settings: Settings, console: Console) -> int:
+    if not args.philosopher:
+        console.print(
+            error_panel(
+                "paper",
+                "No philosopher named — a reading has to be somebody's.",
+                hint_text='philo paper thesis.pdf --as "David Hume"   (`philo sources` lists who is cited)',
+            )
+        )
+        return EXIT_USAGE
+
+    try:
+        text = sys.stdin.read() if args.file in ("-", "") and not sys.stdin.isatty() \
+            else extract_text(Path(args.file))
+    except PaperError as exc:
+        console.print(error_panel("paper", str(exc), hint_text=exc.hint))
+        return EXIT_ERROR
+
+    profile = _load_profile(settings, args.profile)
+    engine = _engine(settings)
+
+    if not args.json:
+        _header(console, settings)
+        console.print(rule(f"{args.philosopher} reads"))
+
+    try:
+        with Spinner(console, f"reading it as {args.philosopher} would"):
+            reading = read_paper(
+                engine, text, args.philosopher,
+                k=args.k, lang=args.lang or (profile.language if profile else ""),
+                reader_note=profile.reader_note() if profile else "",
+                chat_model=args.model, chat_provider=args.chat_provider,
+            )
+    except PaperError as exc:
+        console.print(error_panel("paper", str(exc), hint_text=exc.hint))
+        return EXIT_USAGE
+
+    if args.json:
+        print(json.dumps(reading.to_dict(), ensure_ascii=False, indent=2))
+        return EXIT_OK
+
+    lang = args.lang or reading.lang
+    if reading.title:
+        console.print(Padding(Text(reading.title, style="question"), (1, 2, 1, 2)))
+    console.print(paper_view(reading, lang=lang, show_sources=args.show_sources))
+    console.print()
+    console.print(
+        status_bar([
+            ("read", f"{human_count(reading.n_chars)} chars"),
+            ("model", reading.model or "—"),
+            ("sources", str(len(reading.sources)) if reading.grounded else "none in this library"),
+            ("took", human_ms(reading.took_ms)),
+        ])
+    )
+    _warn_invented(console, reading)
     return EXIT_OK
 
 
