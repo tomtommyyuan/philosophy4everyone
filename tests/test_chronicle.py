@@ -184,3 +184,131 @@ def test_age_is_stated_vaguely_because_the_exact_date_is_in_the_entry(days, expe
 
 def test_an_unparseable_timestamp_is_treated_as_old_not_suppressed():
     assert _age_days("not a date", TODAY) > 1000
+
+
+# --------------------------------------------------------------------------
+# Decisions
+# --------------------------------------------------------------------------
+
+from philo.chronicle.journal import log_decision, weekly_recap   # noqa: E402
+from philo.generation.answerer import Engine                     # noqa: E402
+
+
+# Offline embeddings are lexical, so a decision only retrieves anything if it
+# shares vocabulary with the fixture texts — hence "control" and "disturbed".
+DECISION = "someone disturbed me at work; is my reaction in my control?"
+
+
+@pytest.fixture
+def engine(settings, provider: MockProvider) -> Engine:
+    ingest(settings, provider)
+    return Engine(settings, provider)
+
+
+def test_a_decision_is_recorded_with_what_the_texts_said(engine, tmp_path: Path):
+    book = Chronicle(tmp_path / "me.jsonl")
+    result = log_decision(engine, book, DECISION)
+
+    assert result.grounded
+    assert result.sources
+    stored = Chronicle.load(tmp_path / "me.jsonl")
+    assert len(stored) == 1
+    assert stored.entries[0].kind == "decision"
+    assert stored.entries[0].response
+    assert stored.entries[0].citations[0]["work_title"]
+
+
+def test_the_entry_is_kept_even_when_nothing_could_be_quoted(engine, tmp_path: Path, monkeypatch):
+    """The record is the reader's; an empty retrieval is not a reason to lose it."""
+    monkeypatch.setattr(engine.settings, "min_score", 0.99)
+    book = Chronicle(tmp_path / "me.jsonl")
+    result = log_decision(engine, book, "should I move to another city?")
+
+    assert not result.grounded
+    assert not result.sources
+    assert len(Chronicle.load(tmp_path / "me.jsonl")) == 1
+
+
+def test_no_model_call_is_made_without_sources(engine, tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(engine.settings, "min_score", 0.99)
+    monkeypatch.setattr(
+        engine.provider, "chat",
+        lambda *a, **kw: pytest.fail("the model must not be asked with no sources"),
+    )
+    log_decision(engine, Chronicle(tmp_path / "me.jsonl"), "anything at all")
+
+
+def test_the_decision_prompt_refuses_to_give_a_verdict():
+    from philo.generation.prompts import DECISION_SYSTEM
+
+    assert "Do not tell them what to do" in DECISION_SYSTEM
+    assert "fortune cookie" in DECISION_SYSTEM
+    assert "The decision is the reader's" in DECISION_SYSTEM
+
+
+def test_save_can_be_switched_off(engine, tmp_path: Path):
+    book = Chronicle(tmp_path / "me.jsonl")
+    log_decision(engine, book, DECISION, save=False)
+    assert not (tmp_path / "me.jsonl").exists()
+
+
+# --------------------------------------------------------------------------
+# The weekly recap
+# --------------------------------------------------------------------------
+
+
+def test_an_empty_week_is_not_a_model_call(engine, tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        engine.provider, "chat",
+        lambda *a, **kw: pytest.fail("nothing happened this week; nothing to synthesise"),
+    )
+    recap = weekly_recap(engine, Chronicle(tmp_path / "me.jsonl"), today="2026-02-02")
+    assert recap.empty
+    assert not recap.grounded
+
+
+def test_the_recap_quotes_the_readers_own_saves_first(engine, tmp_path: Path):
+    """A recap that quotes back something they chose beats one that introduces
+    a passage they have never seen."""
+    chunk = next(c for c in engine.store.chunks if "disturbed" in c.text)
+    book = Chronicle(tmp_path / "me.jsonl")
+    book.add(Entry(kind="passage", text=chunk.text, chunk_id=chunk.id,
+                   philosopher=chunk.philosopher, work_title=chunk.work_title,
+                   created="2026-01-30T09:00:00+00:00"))
+    book.add(Entry(kind="decision", text="should I answer the message tonight?",
+                   created="2026-01-31T09:00:00+00:00"))
+
+    recap = weekly_recap(engine, book, today="2026-02-02")
+    assert recap.grounded
+    assert recap.sources[0].chunk.id == chunk.id
+    assert [s.marker for s in recap.sources] == list(range(1, len(recap.sources) + 1))
+    assert len(recap.entries) == 2
+
+
+def test_the_recap_only_resurfaces_things_from_before_the_week(engine, tmp_path: Path):
+    """Something inside the span is already in the recap; calling it a
+    resurfacing would be theatre."""
+    chunk = next(c for c in engine.store.chunks if "disturbed" in c.text)
+    book = Chronicle(tmp_path / "me.jsonl")
+    book.add(Entry(kind="passage", text=chunk.text, chunk_id=chunk.id,
+                   created="2026-01-31T09:00:00+00:00"))
+
+    recap = weekly_recap(engine, book, today="2026-02-02")
+    assert recap.echoes == []
+
+
+def test_entries_outside_the_window_are_not_in_the_week(engine, tmp_path: Path):
+    book = Chronicle(tmp_path / "me.jsonl")
+    book.add(Entry(kind="question", text="old business", created="2025-06-01T09:00:00+00:00"))
+    book.add(Entry(kind="question", text="this week", created="2026-02-01T09:00:00+00:00"))
+
+    recap = weekly_recap(engine, book, today="2026-02-02")
+    assert [e.text for e in recap.entries] == ["this week"]
+
+
+def test_the_recap_prompt_forbids_a_manufactured_pattern():
+    from philo.generation.prompts import RECAP_SYSTEM
+
+    assert "no connecting thread, say that" in RECAP_SYSTEM
+    assert "a false pattern is worse than" in RECAP_SYSTEM
+    assert "no streak talk" in RECAP_SYSTEM

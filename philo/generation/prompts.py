@@ -319,6 +319,26 @@ _ALIASES = {
     "THE ARGUMENT IN FULL": "ACADEMIC",
     "ACADEMIC": "ACADEMIC",
     "学术补充": "ACADEMIC",
+    "THE CHOICE": "CHOICE",
+    "CHOICE": "CHOICE",
+    "你在选的是什么": "CHOICE",
+    "WHAT THE TEXTS WOULD ASK": "TESTS",
+    "WHAT THE TEXTS ASK": "TESTS",
+    "TESTS": "TESTS",
+    "文本会问什么": "TESTS",
+    "WHAT THEY DO NOT SETTLE": "LIMITS",
+    "WHAT THEY DON'T SETTLE": "LIMITS",
+    "LIMITS": "LIMITS",
+    "文本解决不了的": "LIMITS",
+    "THE WEEK": "WEEK",
+    "WEEK": "WEEK",
+    "这一周": "WEEK",
+    "THE THREAD": "THREAD",
+    "THREAD": "THREAD",
+    "线索": "THREAD",
+    "WHAT TO SIT WITH": "SIT",
+    "SIT": "SIT",
+    "留给下周": "SIT",
     "THE OBJECTION": "OBJECTION",
     "OBJECTION": "OBJECTION",
     "反对意见": "OBJECTION",
@@ -551,4 +571,173 @@ def build_objection_messages(
         f"Raise the sharpest objection to {against}'s position that the sources above "
         "actually support — or say plainly that they do not contradict it."
     )
+    return [system(sys_text), user(body)]
+
+
+# --------------------------------------------------------------------------
+# The Chronicle
+# --------------------------------------------------------------------------
+
+
+DECISION_SYSTEM = """\
+Someone has written down a real decision they are facing, and you have \
+passages from philosophical texts that bear on it. Your job is to put the \
+texts to work on *their* specifics.
+
+## The rule that overrides everything else
+
+**Do not tell them what to do.** Not gently, not as a recommendation, not as \
+"on balance". A decision journal that dispenses verdicts is a fortune cookie \
+with citations, and it takes from the reader the one part of this that is \
+actually theirs. The texts supply questions, distinctions and tests. The \
+decision is the reader's.
+
+Everything else follows the usual rule: every philosophical claim must be \
+traceable to the SOURCES block and carry its `[n]` marker. Never invent a \
+quotation, a work, a section or a line. If the sources do not really bear on \
+this decision, say so — that is far more useful than a framework stretched to \
+fit.
+
+Work on the specifics they gave you. Generic advice that would fit any \
+decision is a sign you have stopped reading what they wrote.
+
+## Output format
+
+Return exactly these three sections, with these exact headers, and nothing \
+before, between or after them:
+
+## THE CHOICE
+What is actually being chosen here, said back to them more precisely than \
+they said it. Often the stated choice is not the real one — a job is a \
+question about what a life is for, a conversation is a question about what \
+is owed. Name that if the sources support naming it. Two to four sentences. \
+No advice.
+
+## WHAT THE TEXTS WOULD ASK
+The two or three questions or tests these passages actually supply, each \
+applied to their situation rather than stated in the abstract. Say which \
+text each comes from and cite `[n]`. Where two sources would pull in \
+different directions, say so plainly — that tension is the useful part.
+
+## WHAT THEY DO NOT SETTLE
+What is left over: what these texts have no view on, what turns on facts \
+they cannot supply, what only the reader knows. Two to four sentences. End \
+here; do not resolve it.
+
+Direct, unpatronising, and not therapeutic. No reassurance, no "whatever you \
+decide will be right".
+
+Write in {language_instruction}
+"""
+
+
+RECAP_SYSTEM = """\
+You are writing a short weekly recap for one reader, from their own record: \
+the passages they saved, the decisions they logged, and the questions they \
+asked. You also have the source passages behind those saves.
+
+## What this is and is not
+
+It is a **narrative of their week**, not a summary of philosophy. The reader \
+knows what they saved; what they cannot see is the shape of it — the thing \
+they circled three times without noticing, the question underneath two \
+unrelated decisions.
+
+- Every philosophical claim and every quotation must come from the SOURCES \
+block, with its `[n]` marker. Never invent a line.
+- Say what is actually there. If the week's entries have no connecting \
+thread, say that instead of manufacturing one; a false pattern is worse than \
+none, because the reader will believe it about themselves.
+- Refer to what they wrote concretely — the actual decision, the actual \
+question — not "your recent reflections".
+- If an EARLIER ENTRY block is present, it is something from further back \
+that resembles this week. Say what has changed, not just that it recurred. \
+Do not force it in if the resemblance is thin.
+- No praise for having used the app, no streak talk, no encouragement.
+
+## Output format
+
+Return exactly these three sections, with these exact headers, and nothing \
+before, between or after them:
+
+## THE WEEK
+What they actually did, in three to five sentences. Concrete. Name the \
+decisions and questions.
+
+## THE THREAD
+The connection, if there is one — and if there is not, say so and stop this \
+section there. Where the texts they saved bear on it, cite `[n]`. Roughly \
+80–150 words.
+
+## WHAT TO SIT WITH
+One question for the coming week, arising from their record rather than from \
+philosophy in general. One or two sentences. A question, not an instruction.
+
+Write in {language_instruction}
+"""
+
+
+def build_decision_messages(
+    situation: str,
+    hits: Sequence[ScoredChunk],
+    *,
+    note: str = "",
+    lang: str = "en",
+    reader_note: str = "",
+    echoes: Sequence[str] = (),
+) -> list[Message]:
+    sys_text = DECISION_SYSTEM.replace("{language_instruction}", language_instruction(lang))
+    if reader_note:
+        sys_text += f"\n\n## About this reader\n{reader_note}"
+
+    body = (
+        "SOURCES\n"
+        "=======\n"
+        f"{format_sources(hits)}\n\n"
+        "=======\n"
+        f"THE DECISION, IN THEIR WORDS\n"
+        '"""\n'
+        f"{truncate(situation, 1500)}\n"
+        + (f"\n{truncate(note, 800)}\n" if note else "")
+        + '"""\n'
+    )
+    if echoes:
+        body += (
+            "\nEARLIER ENTRIES THAT RESEMBLE THIS\n"
+            + "\n".join(f"- {e}" for e in echoes[:3])
+            + "\n(Mention only if genuinely relevant; say what has changed.)\n"
+        )
+    body += "\nPut these texts to work on their specifics. Do not tell them what to do."
+    return [system(sys_text), user(body)]
+
+
+def build_recap_messages(
+    entries: Sequence[str],
+    hits: Sequence[ScoredChunk],
+    *,
+    span: str,
+    lang: str = "en",
+    reader_note: str = "",
+    echoes: Sequence[str] = (),
+) -> list[Message]:
+    sys_text = RECAP_SYSTEM.replace("{language_instruction}", language_instruction(lang))
+    if reader_note:
+        sys_text += f"\n\n## About this reader\n{reader_note}"
+
+    body = (
+        "SOURCES\n"
+        "=======\n"
+        f"{format_sources(hits) if hits else '(none)'}\n\n"
+        "=======\n"
+        f"THEIR RECORD, {span}\n"
+        + "\n".join(f"- {e}" for e in entries)
+        + "\n"
+    )
+    if echoes:
+        body += (
+            "\nEARLIER ENTRY THAT RESEMBLES THIS WEEK\n"
+            + "\n".join(f"- {e}" for e in echoes[:2])
+            + "\n"
+        )
+    body += "\nWrite the recap of their week."
     return [system(sys_text), user(body)]
