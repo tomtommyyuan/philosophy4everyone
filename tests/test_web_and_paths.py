@@ -495,3 +495,79 @@ def test_the_page_scopes_citation_clicks_to_their_own_position():
     assert 'data-src="${s.marker}"' in page
     assert 'root.querySelector(`[data-src=' in page
     assert 'id="src-' not in page
+
+
+# --------------------------------------------------------------------------
+# The chronicle
+# --------------------------------------------------------------------------
+
+WEEK = [
+    {
+        "kind": "passage",
+        "created": "2026-08-15T09:00:00+00:00",
+        "text": "Men are disturbed not by the things which happen, but by the opinions.",
+        "chunk_id": "x",
+        "philosopher": "Epictetus",
+        "work_title": "Enchiridion",
+    },
+    {"kind": "decision", "created": "2026-08-16T09:00:00+00:00",
+     "text": "should I answer the message tonight?"},
+]
+
+
+def test_decide_returns_the_three_sections_and_stores_nothing(client, tmp_path):
+    d = client.post(
+        "/api/decide",
+        json={"situation": "someone disturbed me at work; is my reaction in my control?"},
+    ).json()
+    assert d["grounded"] is True
+    assert d["sources"]
+    assert d["choice"]
+    # Nothing on disk: there are no accounts here and a shared deployment must
+    # not accumulate one visitor's record.
+    from philo.web.app import settings_or_error
+
+    chronicle = settings_or_error().chronicle_dir
+    assert not chronicle.exists() or not list(chronicle.glob("*.jsonl"))
+
+
+def test_recap_reads_back_what_the_browser_sent(client):
+    d = client.post("/api/recap", json={"entries": WEEK, "days": 7, "today": "2026-08-19"}).json()
+    assert d["n_entries"] == 2
+    assert d["counts"] == {"passage": 1, "decision": 1}
+    assert d["week"]
+
+
+def test_an_empty_week_is_reported_not_invented(client):
+    d = client.post("/api/recap", json={"entries": [], "days": 7}).json()
+    assert d["n_entries"] == 0
+    assert d["grounded"] is False
+
+
+def test_a_client_cannot_push_an_unbounded_record_into_the_prompt(client):
+    over = [{"kind": "passage", "text": "x"}] * 201
+    assert client.post("/api/recap", json={"entries": over}).status_code == 422
+    assert client.post(
+        "/api/decide", json={"situation": "anything", "entries": over}
+    ).status_code == 422
+
+
+def test_an_unknown_entry_kind_is_coerced_rather_than_rejected(client):
+    """A future client sending a kind this build does not know must not 422."""
+    d = client.post(
+        "/api/recap",
+        json={"entries": [{"kind": "mood", "created": "2026-08-16T09:00:00+00:00",
+                           "text": "restless"}], "days": 7, "today": "2026-08-19"},
+    ).json()
+    assert d["n_entries"] == 1
+    assert d["entries"][0]["kind"] == "question"
+
+
+def test_the_page_scopes_keep_and_citations_per_turn():
+    """Every answer in a thread numbers its own sources from [1]."""
+    from philo.web.app import PAGE
+
+    page = PAGE.read_text(encoding="utf-8")
+    assert '$$(".turn", box).forEach' in page
+    assert "function keptBefore" in page
+    assert "CHRON_KEY" in page
