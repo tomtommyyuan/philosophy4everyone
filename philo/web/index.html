@@ -80,12 +80,13 @@ nav.tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:va
   padding:6px; box-shadow:var(--shadow);
 }
 .askrow { display:flex; gap:8px; align-items:flex-end; }
-textarea#q {
+/* Every composer, not just the Ask one — #theme had been missed. */
+.askrow textarea {
   flex:1; resize:none; border:0; outline:none; background:transparent; color:var(--ink);
   font-family:var(--serif); font-size:18px; line-height:1.5; padding:14px 14px 10px;
   min-height:56px; max-height:200px;
 }
-textarea#q::placeholder { color:var(--faint); }
+.askrow textarea::placeholder { color:var(--faint); }
 button.primary {
   appearance:none; border:0; border-radius:10px; cursor:pointer;
   background:var(--violet); color:#fff; font:inherit; font-weight:600; font-size:14px;
@@ -208,6 +209,28 @@ button.ghost.danger:hover { color:var(--err); border-color:var(--err); }
 }
 .src .credit { margin-top:10px; font-family:var(--sans); font-size:12px; color:var(--faint); }
 
+/* ---- council ---- */
+.seat > h2 { justify-content:space-between; }
+.seat .who { color:var(--muted); font-weight:600; letter-spacing:0; text-transform:none;
+             font-size:12.5px; margin-left:auto; padding-left:14px; text-align:right; }
+.seat .weight { font-family:var(--mono); font-size:11px; color:var(--faint); flex:none; }
+.card.objection { border-color:var(--amber); }
+.card.objection > h2 { color:var(--amber); border-bottom-color:var(--amber-bg); }
+.card.objection > h2::before { content:"\22A5"; }
+.upshot {
+  margin-top:16px; padding-top:14px; border-top:1px solid var(--line-soft);
+}
+.upshot h4 {
+  margin:0 0 8px; font-size:11.5px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--muted); font-weight:700;
+}
+.seatline { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0 2px; }
+.seatline span {
+  font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px;
+  padding:3px 11px; background:var(--panel);
+}
+.seatline span.out { opacity:.5; text-decoration:line-through; }
+
 /* ---- daily ---- */
 .daily-title { font-family:var(--serif); font-size:25px; line-height:1.3; margin:0 0 14px; font-weight:600; }
 .practice {
@@ -275,6 +298,7 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
 
 <nav class="tabs" role="tablist">
   <button role="tab" data-tab="ask" aria-selected="true">Ask</button>
+  <button role="tab" data-tab="council" aria-selected="false">Council</button>
   <button role="tab" data-tab="daily" aria-selected="false">Daily</button>
   <button role="tab" data-tab="library" aria-selected="false">Library</button>
 </nav>
@@ -317,6 +341,33 @@ td.num { text-align:right; font-family:var(--mono); font-size:12.5px; color:var(
   </form>
 
   <div class="examples" id="examples"></div>
+</section>
+
+<!-- ============================ COUNCIL ============================ -->
+<section id="tab-council" class="hidden">
+  <form class="askbox" id="councilform">
+    <div class="askrow">
+      <textarea id="cq" rows="1" placeholder="Is it ever right to break a promise?" autocomplete="off"></textarea>
+      <button class="primary" type="submit">Convene</button>
+    </div>
+    <div class="filters">
+      <select id="c-seats">
+        <option value="3">3 traditions</option>
+        <option value="2">2 traditions</option>
+        <option value="4">4 traditions</option>
+      </select>
+      <select id="c-k">
+        <option value="4">4 passages each</option>
+        <option value="2">2 passages each</option>
+        <option value="6">6 passages each</option>
+      </select>
+      <label class="toggle"><input type="checkbox" id="c-objection" checked> Raise an objection</label>
+    </div>
+    <div class="hintline">Each tradition answers on its own, sourced only from its own texts — then the
+      best-supported position is challenged from the others'. Costs one model call per tradition, plus one
+      for the objection.</div>
+  </form>
+  <div id="council-out"></div>
 </section>
 
 <!-- ============================ DAILY ============================ -->
@@ -495,7 +546,7 @@ function sourceList(sources) {
     const where = [c.work_title, c.section].filter(Boolean).join(" · ");
     const credit = [c.translator && ("tr. " + c.translator), c.tradition, c.rights]
       .filter(Boolean).map(esc).join(" &nbsp;·&nbsp; ");
-    return `<details class="src" id="src-${s.marker}">
+    return `<details class="src" data-src="${s.marker}">
       <summary>
         <span class="n">${s.marker}</span>
         <span><span class="who">${esc(c.philosopher || "—")}</span>
@@ -547,8 +598,12 @@ function renderAnswer(a) {
 }
 
 function wireCitations(root) {
+  // Scoped to `root`, not looked up by a document-wide id: in the council
+  // three positions each number their own sources from [1], and a global
+  // lookup would send every one of those clicks to the first block on the
+  // page — silently citing the wrong tradition.
   $$(".cite", root).forEach(el => el.addEventListener("click", () => {
-    const target = $("#src-" + el.dataset.n);
+    const target = root.querySelector(`[data-src="${el.dataset.n}"]`);
     if (!target) return;
     target.open = true;
     target.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -762,6 +817,97 @@ async function toError(res) {
   return e;
 }
 
+/* ---------------- council ---------------- */
+let councilBusy = false;
+async function council(question) {
+  if (councilBusy || !question.trim()) return;
+  councilBusy = true;
+  const button = $("#councilform button.primary");
+  button.disabled = true;
+
+  const pick = chosenModel();
+  const seats = Number($("#c-seats").value);
+  paint("#council-out", `<div class="card"><h2>Putting the question to ${seats} traditions</h2>
+      <div class="streaming pulse">Each one is answering separately…</div></div>`);
+  try {
+    const c = await api("/api/council", {
+      method: "POST",
+      body: JSON.stringify({
+        question,
+        seats,
+        k: Number($("#c-k").value),
+        objection: $("#c-objection").checked,
+        model: pick.model || "",
+        provider: pick.provider || "",
+      }),
+    });
+    paint("#council-out", renderCouncil(c));
+  } catch (err) {
+    paint("#council-out", errorCard(err));
+  } finally {
+    councilBusy = false;
+    button.disabled = false;
+  }
+}
+
+function renderCouncil(c) {
+  if (!c.held) {
+    // Two different failures with two different fixes: nothing cleared the
+    // floor at all, versus one tradition holding all the relevant text.
+    const spoke = c.positions.filter(p => p.answer);
+    const body = spoke.length
+      ? `<b>Only one tradition here has passages on that.</b>
+         ${esc(spoke.map(p => p.tradition).join(", "))} can answer it, but a debate staged
+         between one voice and itself would misrepresent what this library holds.
+         Ask it on the <b>Ask</b> tab instead.`
+      : `<b>Nothing in this library clears the relevance floor for that.</b>
+         ${c.survey_candidates} passages searched; the closest scored
+         ${Number(c.best_score).toFixed(2)} against a
+         ${Number(c.min_score || 0).toFixed(2)} floor. Try different words — the ones
+         the texts themselves would use.`;
+    return `<div class="notice warn">${body}</div>`;
+  }
+
+  const seated = c.positions.map(p =>
+    `<span class="${p.answer ? "" : "out"}">${esc(p.tradition)}</span>`).join("");
+  let html = `<div class="seatline">${seated}</div>`;
+
+  for (const p of c.positions) {
+    if (!p.answer) {
+      html += `<div class="card objection"><h2>${esc(p.tradition)}</h2>
+        <div class="body">Could not speak — ${esc(p.error || "unknown error")}</div></div>`;
+      continue;
+    }
+    const a = p.answer;
+    const who = p.philosophers.slice(0, 3).map(esc).join(", ");
+    html += `<div class="card seat"><h2>${esc(p.tradition)}
+        <span class="who">${who}</span>
+        <span class="weight">${Number(p.seat_score).toFixed(2)}</span></h2>
+      <div class="body serif">${markdown(a.plain)}`;
+    if (a.academic && a.academic.trim()) {
+      html += `<div class="upshot"><h4>The argument</h4>
+        <div style="font-family:var(--sans);font-size:15.5px">${markdown(a.academic)}</div></div>`;
+    }
+    html += `</div>${sourceList(a.sources)}</div>`;
+  }
+
+  if (c.objection) {
+    const o = c.objection;
+    html += `<div class="card objection"><h2>The objection
+        <span class="who">against ${esc(o.against)} · from ${esc(o.raised_by.join(", "))}</span></h2>
+      <div class="body serif">${markdown(o.text)}`;
+    if (o.upshot && o.upshot.trim()) {
+      html += `<div class="upshot"><h4>Where this leaves it</h4>${markdown(o.upshot)}</div>`;
+    }
+    html += `</div>${sourceList(o.sources)}</div>`;
+  }
+
+  html += `<div class="foot">${c.positions.filter(p => p.answer).length} traditions  ·
+      ${esc(c.model || "")}  ·  ${c.took_ms} ms  ·
+      ${c.objection ? "objection raised" : "no objection"}</div>`;
+  return html;
+}
+
 /* ---------------- daily ---------------- */
 async function daily(theme) {
   paint("#daily-out", `<div class="card"><h2>Composing</h2>
@@ -812,7 +958,8 @@ async function library() {
 /* ---------------- tabs ---------------- */
 function switchTab(name) {
   $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
-  ["ask", "daily", "library"].forEach(t => $("#tab-" + t).classList.toggle("hidden", t !== name));
+  ["ask", "council", "daily", "library"].forEach(t =>
+    $("#tab-" + t).classList.toggle("hidden", t !== name));
   if (name === "library" && !$("#library-out").dataset.loaded) {
     $("#library-out").dataset.loaded = "1";
     library();
@@ -841,13 +988,25 @@ const EXAMPLES = [
     $("#q").value = b.textContent; ask(b.textContent);
   }));
 
-  const q = $("#q");
-  const grow = () => { q.style.height = "auto"; q.style.height = Math.min(q.scrollHeight, 200) + "px"; };
-  q.addEventListener("input", grow);
-  q.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(q.value); }
-  });
+  // Grow-on-type and Enter-to-submit for every composer, each wired to its
+  // own action rather than three near-identical copies of the same handler.
+  const compose = (id, run) => {
+    const box = $(id);
+    box.addEventListener("input", () => {
+      box.style.height = "auto";
+      box.style.height = Math.min(box.scrollHeight, 200) + "px";
+    });
+    box.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(box.value); }
+    });
+    return box;
+  };
+  const q = compose("#q", v => ask(v));
+  const cq = compose("#cq", v => council(v));
+  compose("#theme", v => daily(v.trim()));
+
   $("#askform").addEventListener("submit", e => { e.preventDefault(); ask(q.value); });
+  $("#councilform").addEventListener("submit", e => { e.preventDefault(); council(cq.value); });
   $("#dailyform").addEventListener("submit", e => { e.preventDefault(); daily($("#theme").value.trim()); });
 
   loadThreads();

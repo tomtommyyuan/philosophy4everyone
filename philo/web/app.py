@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 from .. import __version__
 from ..config import ConfigError, Settings, get_settings
 from ..generation.answerer import AskOptions, Conversation, Engine
+from ..generation.council import DEFAULT_SEATS, MAX_SEATS, hold_council
 from ..personalize.daily import generate_daily
 from ..personalize.profile import DEFAULT_PROFILE_NAME, Profile
 from ..providers import get_provider
@@ -57,6 +58,20 @@ def settings_or_error() -> Settings:
 
 MAX_K = 12
 MAX_QUESTION_CHARS = 600
+
+
+def max_seats() -> int:
+    """How many traditions a visitor may seat.
+
+    A council spends N+1 completions per click, on the operator's key. The
+    token gate already decides *who* may spend; this decides how much a
+    single click can cost, in the same spirit as PHILO_WEB_MODELS.
+    """
+    try:
+        wanted = int(os.environ.get("PHILO_WEB_MAX_SEATS", "").strip() or MAX_SEATS)
+    except ValueError:
+        return MAX_SEATS
+    return max(0, min(wanted, MAX_SEATS))
 
 
 # --------------------------------------------------------------------------
@@ -157,6 +172,17 @@ class AskRequest(BaseModel):
     # Prior turns, oldest first. Only the tail is used; the cap bounds both
     # the prompt size and what a client can push into the context.
     history: list[Turn] = Field(default_factory=list, max_length=40)
+
+
+class CouncilRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
+    model: str = Field(default="", max_length=120)
+    provider: str = Field(default="", max_length=32)
+    seats: int = Field(default=DEFAULT_SEATS, ge=1, le=MAX_SEATS)
+    k: int = Field(default=4, ge=1, le=8)
+    objection: bool = True
+    lang: str = ""
+    profile: str = ""
 
 
 def _filters(req: AskRequest) -> Filters:
@@ -362,6 +388,46 @@ def create_app() -> FastAPI:
                 "Connection": "keep-alive",
             },
         )
+
+    # ---- council -------------------------------------------------------
+    @app.post("/api/council", dependencies=[Depends(require_token)])
+    def council(req: CouncilRequest, engine: Engine = Depends(get_engine)) -> dict[str, Any]:
+        """Several traditions answering independently, then the objection.
+
+        Not streamed. The positions are generated concurrently, so there is
+        no single token stream to follow, and three of them interleaved
+        would be unreadable anyway.
+        """
+        settings = settings_or_error()
+        allowed = max_seats()
+        if not allowed:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "the council is disabled on this deployment",
+                    "hint": "It costs one completion per tradition; PHILO_WEB_MAX_SEATS is 0.",
+                },
+            )
+        profile = (
+            Profile.load_or_default(settings.profiles_dir, req.profile) if req.profile else None
+        )
+        try:
+            result = hold_council(
+                engine,
+                req.question,
+                seats=min(req.seats, allowed),
+                k=req.k,
+                lang=req.lang or (profile.language if profile else "") or detect_language(req.question),
+                reader_note=profile.reader_note() if profile else "",
+                chat_model=req.model.strip(),
+                chat_provider=req.provider.strip(),
+                objection=req.objection,
+            )
+        except ProviderError as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc), "hint": exc.hint}) from exc
+        payload = result.to_dict()
+        payload["min_score"] = settings.min_score
+        return payload
 
     # ---- daily ---------------------------------------------------------
     @app.get("/api/daily", dependencies=[Depends(require_token)])

@@ -444,3 +444,54 @@ def test_history_is_capped(client):
     ok = client.post("/api/ask", json={
         "question": "what is in my control?", "history": turns[:10]})
     assert ok.status_code == 200          # trimmed to the last few turns
+
+
+# --------------------------------------------------------------------------
+# The council
+# --------------------------------------------------------------------------
+
+COUNCIL_Q = "what is excellence and what is in our control?"
+
+
+def test_council_endpoint_returns_one_position_per_tradition(client):
+    d = client.post("/api/council", json={"question": COUNCIL_Q, "seats": 2, "k": 3}).json()
+    assert d["held"] is True
+    assert {p["tradition"] for p in d["positions"]} == {"Stoicism", "Daoism"}
+    for position in d["positions"]:
+        cited = {s["chunk"]["tradition"] for s in position["answer"]["sources"]}
+        assert cited == {position["tradition"]}
+
+
+def test_council_objection_never_uses_the_position_it_challenges(client):
+    d = client.post("/api/council", json={"question": COUNCIL_Q, "seats": 2, "k": 3}).json()
+    objection = d["objection"]
+    assert objection is not None
+    assert objection["against"] not in {s["chunk"]["tradition"] for s in objection["sources"]}
+
+
+def test_council_seats_are_capped_by_the_deployment(client, monkeypatch):
+    """A visitor clicking Convene spends N+1 completions on the operator's key."""
+    monkeypatch.setenv("PHILO_WEB_MAX_SEATS", "2")
+    d = client.post("/api/council", json={"question": COUNCIL_Q, "seats": 4, "k": 3}).json()
+    assert len(d["positions"]) <= 2
+
+
+def test_the_council_can_be_switched_off_entirely(client, monkeypatch):
+    monkeypatch.setenv("PHILO_WEB_MAX_SEATS", "0")
+    res = client.post("/api/council", json={"question": COUNCIL_Q})
+    assert res.status_code == 403
+    assert "disabled" in res.json()["detail"]["error"]
+
+
+def test_a_nonsense_seat_count_is_rejected_not_clamped(client):
+    assert client.post("/api/council", json={"question": COUNCIL_Q, "seats": 99}).status_code == 422
+
+
+def test_the_page_scopes_citation_clicks_to_their_own_position():
+    """Three positions each own a [1]; a document-wide lookup would misfire."""
+    from philo.web.app import PAGE
+
+    page = PAGE.read_text(encoding="utf-8")
+    assert 'data-src="${s.marker}"' in page
+    assert 'root.querySelector(`[data-src=' in page
+    assert 'id="src-' not in page
