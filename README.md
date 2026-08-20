@@ -415,6 +415,28 @@ titled "On Anxiety (solicitude)" at 0.96.
 One completion, not one per school — a daily check-in that costs four model
 calls is one nobody leaves switched on.
 
+### Getting it daily
+
+There is no subscribe button, deliberately. `philo mood worried --json` is a
+clean cron target today, and that covers the case where you are the audience.
+
+An **email subscription** is a bigger job than it looks, and these are the parts
+that make it so rather than reasons not to do it:
+
+- **A provider.** Resend is on the Vercel Marketplace (`vercel integration add
+  resend/resend-email`) and its free tier is 100 sends a day.
+- **A verified sending domain.** Without one, mail from a fresh sender lands in
+  spam, so the feature silently does nothing.
+- **Somewhere to keep subscribers.** A serverless function has no disk, so this
+  means a database — one more provisioned service.
+- **Double opt-in, and it is not optional.** An open form on a public URL lets
+  anyone subscribe *somebody else's* address. Without a confirmation step the
+  button is an abuse vector pointed at strangers, and an unsubscribe link is a
+  legal requirement in most jurisdictions.
+
+Roughly two hours and two new billing relationships. Worth doing on purpose,
+not worth doing by accident.
+
 ---
 
 ## Reading a paper
